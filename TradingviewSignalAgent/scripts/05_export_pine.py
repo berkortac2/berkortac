@@ -27,6 +27,11 @@ def main():
     tr = res[(res.family == fam) & (res.group == "train_coins")]
     stats = {r.tf: {"dir_hit": r.dir_hit, "win_rate": r.win_rate, "trades": r.trades, "avg_net": r.avg_net}
              for r in tr.itertuples()}
+    m5 = models[fam].get("5m", {})
+    if str(m5.get("config", "")).startswith("deep5m:"):   # second-round 5m model: its own locked-test row
+        d = pd.read_csv(ROOT / "reports" / "deep5m_final_results.csv")
+        r = d[(d.group == "search12") & (d.model == m5["config"].split(":")[1]) & (d.fee == "futures_taker")].iloc[0]
+        stats["5m"] = {"dir_hit": r.dir_hit, "win_rate": r.win_rate, "trades": r.trades, "avg_net": r.avg_net}
     label = FAMILY_TR.get(fam, fam)
     out = ROOT / "pine"
     out.mkdir(exist_ok=True)
