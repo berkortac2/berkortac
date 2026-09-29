@@ -117,7 +117,9 @@ class BinanceFutures:
         self._key, self._secret = api_key, api_secret
         if api_key:
             REDACT.add(api_key, api_secret)
+        # trust_env=False: no proxy / CA overrides from the environment unless the user opts in
         self.http = http or httpx.AsyncClient(timeout=15.0, follow_redirects=False,
+                                              trust_env=os.environ.get("TSABOT_TRUST_ENV") == "1",
                                               headers={"User-Agent": "tsabot/1.0"})
         self.recv_window = recv_window
         self.offset_ms = 0
@@ -187,8 +189,8 @@ class BinanceFutures:
     async def dual_side(self) -> bool:
         return bool((await self.request("GET", "/fapi/v1/positionSide/dual", signed=True))["dualSidePosition"])
 
-    async def positions(self) -> list[dict]:
-        return await self.request("GET", "/fapi/v3/positionRisk", signed=True)
+    async def positions(self, symbol: str | None = None) -> list[dict]:
+        return await self.request("GET", "/fapi/v3/positionRisk", {"symbol": symbol}, signed=True)
 
     async def set_leverage(self, symbol: str, leverage: int):
         return await self.request("POST", "/fapi/v1/leverage", {"symbol": symbol, "leverage": leverage}, True)

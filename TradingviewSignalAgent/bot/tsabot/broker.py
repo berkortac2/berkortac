@@ -26,8 +26,11 @@ class PaperBroker:
     def __init__(self, fee: float = TAKER_FEE, slippage: float = SLIPPAGE):
         self.fee, self.slip = fee, slippage
 
-    async def prepare(self, symbols, leverage) -> list[str]:
+    async def prepare(self, symbols, leverage, own=()) -> list[str]:
         return []
+
+    async def position_of(self, symbol) -> tuple[float, float | None]:
+        return 0.0, None
 
     async def available_usdt(self) -> float | None:
         return None      # only the budget limits paper trading
@@ -59,13 +62,14 @@ class BinanceBroker:
         self.external: set[str] = set()
         self.prepared: set[str] = set()
 
-    async def prepare(self, symbols, leverage) -> list[str]:
-        """Checks account mode; returns warnings. Symbols with a position the bot did not open are skipped."""
+    async def prepare(self, symbols, leverage, own=()) -> list[str]:
+        """Checks account mode; returns warnings. Symbols with a position the bot did not open
+        (not in its own persisted positions) are skipped."""
         warns = []
         if await self.client.dual_side():
             raise ExchangeError(0, None, "Hesap Hedge Mode'da. Binance Futures ayarlarından One-way Mode'a geç.")
         for p in await self.client.positions():
-            if float(p.get("positionAmt", 0)) != 0 and p["symbol"] in symbols:
+            if float(p.get("positionAmt", 0)) != 0 and p["symbol"] in symbols and p["symbol"] not in own:
                 self.external.add(p["symbol"])
         if self.external:
             warns.append(f"Elle açılmış pozisyonlar olduğu için atlanıyor: {sorted(self.external)}")
@@ -108,19 +112,35 @@ class BinanceBroker:
     async def cancel_brackets(self, symbol):
         await self.client.cancel_conditionals(symbol)
 
+    async def position_of(self, symbol) -> tuple[float, float | None]:
+        """(signed position amount, entry price) of one symbol on the exchange."""
+        for p in await self.client.positions(symbol):
+            if p.get("symbol") == symbol:
+                return float(p.get("positionAmt", 0)), float(p.get("entryPrice", 0)) or None
+        return 0.0, None
+
     async def closed_by_exchange(self, open_syms: dict) -> dict:
-        """{symbol: Fill} for bot positions that the exchange closed (TP/SL/liquidation)."""
+        """{symbol: Fill} for bot positions that the exchange closed (TP/SL/liquidation).
+        A position is only declared closed after a per-symbol re-check shows it flat."""
         if not open_syms:
             return {}
         amt = {p["symbol"]: float(p.get("positionAmt", 0)) for p in await self.client.positions()}
         out = {}
         for sym, pos in open_syms.items():
-            if amt.get(sym, 0.0) == 0.0:
-                trades = await self.client.user_trades(sym, pos.entry_time_ms)
-                closing = [t for t in trades if (t["side"] == "SELL") == (pos.direction > 0)]
-                q = sum(float(t["qty"]) for t in closing) or pos.qty
-                px = sum(float(t["price"]) * float(t["qty"]) for t in closing) / q if closing else pos.entry_price
+            if amt.get(sym, 0.0) != 0.0:
+                continue
+            a, _ = await self.position_of(sym)          # confirm: never act on an incomplete list
+            if a != 0.0:
+                continue
+            trades = await self.client.user_trades(sym, pos.entry_time_ms)
+            closing = [t for t in trades if (t["side"] == "SELL") == (pos.direction > 0)]
+            if closing:
+                q = sum(float(t["qty"]) for t in closing)
+                px = sum(float(t["price"]) * float(t["qty"]) for t in closing) / q
                 fee = sum(float(t.get("commission", 0)) for t in closing)
-                await self.cancel_brackets(sym)
-                out[sym] = Fill(px, q, fee)
+            else:
+                q, px, fee = pos.qty, await self.client.price(sym), pos.qty * pos.entry_price * TAKER_FEE
+                log.warning("%s closed on exchange but no closing fills found; using last price", sym)
+            await self.cancel_brackets(sym)
+            out[sym] = Fill(px, q, fee)
         return out

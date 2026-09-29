@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import hmac
 import json
-import re
+import os
 import secrets as _secrets
 import time
 from contextlib import asynccontextmanager
@@ -23,6 +23,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -33,14 +34,14 @@ from .config import DATA_DIR, MODEL_PATH, Settings, load_settings, save_settings
 from .engine import Engine
 from .exchange.binance import BinanceFutures, ExchangeError
 from .market import LiveMarket, ReplayMarket
-from .secrets import REDACT, Secret, Vault, env_keys, hash_password, verify_password, write_private
+from .secrets import REDACT, Secret, Vault, env_keys, hash_password, valid_key, verify_password, write_private
 from .store import Store
 from .strategy import Strategy
 
 WEB = BOT_ROOT / "web"
 ALLOWED_HOSTS = {"127.0.0.1", "localhost"}
-SESSION_TTL = 12 * 3600
-KEY_RE = re.compile(r"^[A-Za-z0-9]{16,128}$")
+SESSION_TTL = 12 * 3600          # idle timeout
+SESSION_MAX = 24 * 3600          # absolute lifetime
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; "
        "font-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
 
@@ -64,10 +65,21 @@ class CheckBody(BaseModel):
     venue: str = Field(pattern="^(live|testnet)$")
 
 
+class StartBody(BaseModel):
+    password: str = Field(default="", max_length=256)
+
+
+def ceq(a: str, b: str) -> bool:
+    """Constant-time compare that never raises on non-ASCII input."""
+    return hmac.compare_digest((a or "").encode(), (b or "").encode())
+
+
 class AppState:
     def __init__(self, data_dir: Path, model_path: Path, factories: dict | None = None):
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
+        os.chmod(self.data_dir, 0o700)
+        self.lock = asyncio.Lock()          # serialises start / stop / panic / settings / keys
         self.auth_path = self.data_dir / "auth.json"
         self.settings_path = self.data_dir / "settings.json"
         self.vault = Vault(self.data_dir / "vault.json")
@@ -128,10 +140,14 @@ def create_app(data_dir: Path = DATA_DIR, model_path: Path = MODEL_PATH, factori
         host = (request.headers.get("host") or "").rsplit(":", 1)[0].strip("[]")
         if host not in ALLOWED_HOSTS:
             return PlainTextResponse("Invalid host", status_code=400)
+        if "transfer-encoding" in request.headers:
+            return PlainTextResponse("Chunked bodies are not accepted", status_code=411)
         if request.method in ("POST", "PUT", "DELETE", "PATCH"):
             origin = request.headers.get("origin")
-            if origin and urlsplit(origin).hostname not in ALLOWED_HOSTS:
+            if origin and origin != f"http://{request.headers.get('host', '')}":
                 return PlainTextResponse("Cross-origin request refused", status_code=403)
+            if request.headers.get("sec-fetch-site", "same-origin") not in ("same-origin", "none"):
+                return PlainTextResponse("Cross-site request refused", status_code=403)
             if not (request.headers.get("content-type") or "").startswith("application/json"):
                 return PlainTextResponse("JSON body required", status_code=415)
             cl = request.headers.get("content-length")
@@ -148,22 +164,31 @@ def create_app(data_dir: Path = DATA_DIR, model_path: Path = MODEL_PATH, factori
         resp.headers["Cache-Control"] = "no-store"
         return resp
 
+    @app.exception_handler(RequestValidationError)
+    async def _validation(request: Request, exc: RequestValidationError):
+        # never echo submitted values (they may be secrets)
+        msg = "; ".join(f"{'.'.join(str(x) for x in e.get('loc', ())[1:])}: {e.get('msg', '')}" for e in exc.errors())
+        return JSONResponse({"detail": msg[:300] or "Geçersiz istek"}, status_code=422)
+
     # ------------------------------------------------------------ auth helpers
     def session(request: Request) -> dict:
         tok = request.cookies.get("tsa_session", "")
         s = st.sessions.get(tok)
-        if not s or s["exp"] < time.time():
+        if not s or s["exp"] < time.time() or s["created"] + SESSION_MAX < time.time():
             st.sessions.pop(tok, None)
             raise HTTPException(401, "Oturum gerekli")
         if request.method != "GET":
-            if not hmac.compare_digest(request.headers.get("x-csrf-token", ""), s["csrf"]):
+            if not ceq(request.headers.get("x-csrf-token", ""), s["csrf"]):
                 raise HTTPException(403, "CSRF doğrulaması başarısız")
         s["exp"] = time.time() + SESSION_TTL
         return s
 
     def new_session(resp: JSONResponse) -> None:
+        now = time.time()
+        for k in [k for k, v in st.sessions.items() if v["exp"] < now or v["created"] + SESSION_MAX < now]:
+            st.sessions.pop(k, None)
         tok, csrf = _secrets.token_urlsafe(32), _secrets.token_urlsafe(32)
-        st.sessions[tok] = {"exp": time.time() + SESSION_TTL, "csrf": csrf}
+        st.sessions[tok] = {"exp": now + SESSION_TTL, "created": now, "csrf": csrf}
         resp.set_cookie("tsa_session", tok, httponly=True, samesite="strict", max_age=SESSION_TTL, path="/")
         resp.headers["X-CSRF-Token"] = csrf
 
@@ -205,7 +230,7 @@ def create_app(data_dir: Path = DATA_DIR, model_path: Path = MODEL_PATH, factori
     async def setup(body: SetupBody):
         if st.setup_token is None:
             raise HTTPException(409, "Şifre zaten belirlenmiş")
-        if not hmac.compare_digest(body.token, st.setup_token):
+        if not ceq(body.token, st.setup_token):
             raise HTTPException(403, "Kurulum anahtarı hatalı (konsolda yazan adresi kullanın)")
         write_private(st.auth_path, json.dumps(hash_password(body.password)))
         st.setup_token = None
@@ -243,9 +268,13 @@ def create_app(data_dir: Path = DATA_DIR, model_path: Path = MODEL_PATH, factori
 
     @app.put("/api/keys")
     async def keys_put(body: KeysBody, s: dict = Depends(session)):
+        async with st.lock:
+            return await _keys_put(body)
+
+    async def _keys_put(body: KeysBody):
         if not check_password(body.password):
             raise HTTPException(401, "Şifre hatalı")
-        if not (KEY_RE.match(body.api_key) and KEY_RE.match(body.api_secret)):
+        if not (valid_key(body.api_key) and valid_key(body.api_secret)):
             raise HTTPException(422, "API anahtarı / gizli anahtar biçimi geçersiz")
         if st.engine and st.engine.running and st.engine.mode in ("live", "testnet"):
             raise HTTPException(409, "Önce botu durdurun")
@@ -277,6 +306,10 @@ def create_app(data_dir: Path = DATA_DIR, model_path: Path = MODEL_PATH, factori
             out["dual_side"] = await client.dual_side()
             if venue == "live":
                 r = await client.api_restrictions()
+                need = ("enableFutures", "enableWithdrawals", "enableInternalTransfer", "permitsUniversalTransfer")
+                if any(k not in r for k in need):   # fail closed
+                    out.update(ok=False, error="Anahtar izinleri okunamadı; güvenlik için canlı işlem yapılmaz.")
+                    return out
                 out.update(futures=bool(r.get("enableFutures")), withdrawals=bool(r.get("enableWithdrawals")),
                            internal_transfer=bool(r.get("enableInternalTransfer")),
                            universal_transfer=bool(r.get("permitsUniversalTransfer")),
@@ -316,51 +349,65 @@ def create_app(data_dir: Path = DATA_DIR, model_path: Path = MODEL_PATH, factori
             raise HTTPException(400, "Geçersiz JSON")
         if not isinstance(d, dict):
             raise HTTPException(400, "Geçersiz JSON")
-        new = Settings.from_dict({**asdict(st.settings), **d})
-        err = new.validate()
-        if err:
-            raise HTTPException(422, "; ".join(err))
-        if st.engine and st.engine.running:
-            raise HTTPException(409, "Ayarları değiştirmek için önce botu durdurun")
-        if new.mode != "live":
-            new.live_confirmed = False if st.settings.mode == "live" else new.live_confirmed
-        st.settings = new
-        save_settings(new, st.settings_path)
-        return asdict(new)
+        async with st.lock:
+            new = Settings.from_dict({**asdict(st.settings), **d})
+            err = new.validate()
+            if err:
+                raise HTTPException(422, "; ".join(err))
+            if st.engine and st.engine.running:
+                raise HTTPException(409, "Ayarları değiştirmek için önce botu durdurun")
+            # the live confirmation must be given explicitly, in live mode, in this very request
+            new.live_confirmed = new.mode == "live" and d.get("live_confirmed") is True
+            st.settings = new
+            save_settings(new, st.settings_path)
+            return asdict(new)
 
     # ------------------------------------------------------------ bot control
     @app.post("/api/bot/start")
-    async def bot_start(s: dict = Depends(session)):
-        cfg = st.settings
-        if st.engine and st.engine.running:
+    async def bot_start(body: StartBody, s: dict = Depends(session)):
+        async with st.lock:
+            cfg = st.settings
+            if st.engine and st.engine.running:
+                return {"ok": True, "running": True}
+            if cfg.mode in ("testnet", "live") and not st.keys:
+                raise HTTPException(400, "Bu mod için API anahtarı gerekli (API Anahtarları sekmesi)")
+            if cfg.mode == "live":
+                if not cfg.live_confirmed:
+                    raise HTTPException(400, "Canlı işlem için Ayarlar'da 'Gerçek parayla işlem yapılacağını "
+                                             "onaylıyorum' kutusunu işaretleyin")
+                if not check_password(body.password):          # step-up: password again for real money
+                    raise HTTPException(401, "Canlı başlatmak için arayüz şifresini girin")
+                chk = await permission_check("live")
+                st.last_check = chk
+                if not chk.get("ok"):
+                    raise HTTPException(400, chk.get("error", "Anahtar kontrolü başarısız"))
+            if not st.model_path.exists():
+                raise HTTPException(500, "Model dosyası bulunamadı")
+            eng = st.build_engine()
+            await eng.start()
+            st.engine = eng
             return {"ok": True, "running": True}
-        if cfg.mode in ("testnet", "live") and not st.keys:
-            raise HTTPException(400, "Bu mod için API anahtarı gerekli (API Anahtarları sekmesi)")
-        if cfg.mode == "live":
-            if not cfg.live_confirmed:
-                raise HTTPException(400, "Canlı işlem için Ayarlar'da 'Gerçek parayla işlem yapılacağını "
-                                         "onaylıyorum' kutusunu işaretleyin")
-            chk = await permission_check("live")
-            st.last_check = chk
-            if not chk.get("ok"):
-                raise HTTPException(400, chk.get("error", "Anahtar kontrolü başarısız"))
-        if not st.model_path.exists():
-            raise HTTPException(500, "Model dosyası bulunamadı")
-        st.engine = st.build_engine()
-        await st.engine.start()
-        return {"ok": True, "running": True}
 
     @app.post("/api/bot/stop")
     async def bot_stop(s: dict = Depends(session)):
-        if st.engine:
-            await st.engine.stop()
-        return {"ok": True, "running": False}
+        async with st.lock:
+            if st.engine:
+                await st.engine.stop()
+            return {"ok": True, "running": False}
 
     @app.post("/api/bot/panic")
     async def bot_panic(s: dict = Depends(session)):
-        if st.engine:
+        async with st.lock:
+            if st.engine is None or not st.engine.running:
+                persisted = st.store.get(f"positions:{st.settings.mode}", {}) or {}
+                if not persisted:
+                    return {"ok": True, "running": False, "closed": 0}
+                if st.settings.mode in ("testnet", "live") and not st.keys:
+                    raise HTTPException(400, "Kayıtlı pozisyonları kapatmak için API anahtarı gerekli")
+                st.engine = st.build_engine()        # restores the persisted positions
+            n = len(st.engine.positions)
             await st.engine.panic()
-        return {"ok": True, "running": False}
+            return {"ok": True, "running": False, "closed": n}
 
     @app.post("/api/bot/reset")
     async def bot_reset(s: dict = Depends(session)):
@@ -383,9 +430,14 @@ def create_app(data_dir: Path = DATA_DIR, model_path: Path = MODEL_PATH, factori
         else:
             m = st.settings.mode
             tot = st.store.realized(m)
+            persisted = list((st.store.get(f"positions:{m}", {}) or {}).values())
+            for p in persisted:
+                p.setdefault("unrealized", None)
+                p.setdefault("last_price", None)
             snap = {"running": False, "status": "Durduruldu", "mode": m, "budget": st.settings.budget_usdt,
-                    "effective_budget": st.settings.budget_usdt + min(tot, 0), "margin_used": 0.0,
-                    "realized": tot, "realized_today": 0.0, "unrealized": 0.0, "positions": [],
+                    "effective_budget": st.settings.budget_usdt + min(tot, 0),
+                    "margin_used": sum(float(p.get("margin") or 0) for p in persisted),
+                    "realized": tot, "realized_today": 0.0, "unrealized": 0.0, "positions": persisted,
                     "last_bar": None, "symbols": len(st.settings.symbols), "stats": st.store.stats(m)}
         snap["keys"] = {"unlocked": st.keys is not None, "source": st.keys_source}
         return snap

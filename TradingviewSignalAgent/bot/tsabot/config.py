@@ -58,6 +58,12 @@ class Settings:
             bad = [s for s in self.symbols if not isinstance(s, str) or not SYMBOL_RE.match(s)]
             if bad:
                 err.append(f"only USDT perpetual symbols like BTCUSDT are allowed: {bad[:5]}")
+        for k in ("allow_long", "allow_short", "compound", "live_confirmed"):
+            if not isinstance(getattr(self, k), bool):
+                err.append(f"{k} must be true/false")
+        for k in ("max_positions", "leverage"):
+            if not isinstance(getattr(self, k), int) or isinstance(getattr(self, k), bool):
+                err.append(f"{k} must be a whole number")
         if not (self.allow_long or self.allow_short):
             err.append("enable at least one direction")
         return err

@@ -163,7 +163,9 @@ def make(tmp_path, restrictions=None, model=True):
     mp = tmp_path / "model.json"
     if model:
         mp.write_text(json.dumps({"long": {"rules": [[["rsi", "<=", -0.9]]], "H": 6}, "short": {"rules": [], "H": 6}}))
-    fac = {"client": lambda venue, keys: FakeClient(restrictions or {"enableFutures": True})}
+    fac = {"client": lambda venue, keys: FakeClient(restrictions or {
+        "enableFutures": True, "enableWithdrawals": False, "enableInternalTransfer": False,
+        "permitsUniversalTransfer": False})}
     app = create_app(tmp_path / "data", mp, fac)
     return app, TestClient(app, base_url="http://127.0.0.1")
 
@@ -254,15 +256,16 @@ def test_api_secret_never_leaves(tmp_path):
 
 
 def test_live_refused_without_confirmation_or_with_withdraw_key(tmp_path):
-    app, c = make(tmp_path, restrictions={"enableFutures": True, "enableWithdrawals": True})
+    app, c = make(tmp_path, restrictions={"enableFutures": True, "enableWithdrawals": True,
+                                          "enableInternalTransfer": False, "permitsUniversalTransfer": False})
     tok = login(app, c)
     H = {"x-csrf-token": tok}
     c.put("/api/keys", json={"password": PW, "api_key": KEY, "api_secret": SECRET}, headers=H)
     assert c.put("/api/settings", json={"mode": "live"}, headers=H).status_code == 200
     r = c.post("/api/bot/start", json={}, headers=H)
     assert r.status_code == 400 and "onay" in r.json()["detail"].lower()
-    c.put("/api/settings", json={"live_confirmed": True}, headers=H)
-    r = c.post("/api/bot/start", json={}, headers=H)
+    c.put("/api/settings", json={"mode": "live", "live_confirmed": True}, headers=H)
+    r = c.post("/api/bot/start", json={"password": PW}, headers=H)
     assert r.status_code == 400 and "çekme" in r.json()["detail"]
     assert app.state.tsa.engine is None
 

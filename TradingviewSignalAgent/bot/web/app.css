@@ -117,3 +117,4 @@ label.check input{width:16px;height:16px;margin-top:2px;accent-color:var(--prima
   nav{flex-direction:row;flex-wrap:wrap}.side-foot{margin:0;flex-direction:row}.grid2{grid-template-columns:1fr}
   .kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.form-grid{grid-template-columns:1fr}main{padding:16px}
 }
+.top-pw{width:190px;padding:8px 10px}

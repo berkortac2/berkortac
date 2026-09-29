@@ -15,6 +15,7 @@ from dataclasses import asdict, dataclass
 from .broker import Fill
 from .config import Settings
 from .risk import Risk
+from .secrets import REDACT
 from .store import Store
 from .strategy import Strategy
 
@@ -62,6 +63,7 @@ class Engine:
         self.last_bar_ms: int | None = None
         self.status_msg = "Durduruldu"
         self.errors = 0
+        self.quarantine: dict[str, object] = {}   # symbol -> signal whose order outcome is unknown
 
     # ---------------------------------------------------------------- lifecycle
     @property
@@ -69,6 +71,7 @@ class Engine:
         return self.task is not None and not self.task.done()
 
     def emit(self, level: str, msg: str) -> None:
+        msg = REDACT.clean(msg)
         ts = self._now()
         self.store.event(level, msg, ts)
         self.feed.appendleft({"ts": ts, "level": level, "msg": msg})
@@ -96,8 +99,9 @@ class Engine:
         self.status_msg = "Durduruldu"
 
     async def panic(self) -> None:
-        """Close every bot position at market and stop."""
+        """Stop the loop FIRST (no entry can start afterwards), then close every bot position."""
         self.stop_event.set()
+        await self.stop()
         for sym in list(self.positions):
             try:
                 px = await self.market.price(sym)
@@ -105,7 +109,7 @@ class Engine:
                                                               self.positions[sym].qty, px), "Acil kapatma")
             except Exception as e:  # keep closing the others
                 self.emit("error", f"{sym} kapatılamadı: {e}")
-        await self.stop()
+        self._persist()
 
     async def _run(self) -> None:
         try:
@@ -115,7 +119,7 @@ class Engine:
             missing = sorted(set(self.s.symbols) - set(self.symbols))
             if missing:
                 self.emit("warn", f"Borsada işlem görmeyen / veri olmayan semboller atlandı: {missing}")
-            for w in await self.broker.prepare(self.symbols, self.s.leverage):
+            for w in await self.broker.prepare(self.symbols, self.s.leverage, own=set(self.positions)):
                 self.emit("warn", w)
             self.emit("info", f"Bot başladı ({self.mode}), {len(self.symbols)} USDT paritesi izleniyor, "
                               f"bütçe {self.s.budget_usdt:.2f} USDT, kaldıraç {self.s.leverage}x")
@@ -159,6 +163,8 @@ class Engine:
                 self.last_prices[sym] = float(k5["close"].iloc[-1])
                 self.last_bar_ms = int(k5["open_time"].iloc[-1])
 
+        await self._reconcile()
+
         # 1) exits -------------------------------------------------------------
         for sym, fill in (await self.broker.closed_by_exchange(dict(self.positions))).items():
             await self._exit(sym, fill, "TP/SL (borsa)")
@@ -188,7 +194,7 @@ class Engine:
         now = self._now()
         for sym in self.symbols:
             k5, k1 = data.get(sym, (None, None))
-            if k5 is None or not len(k5) or sym in getattr(self.broker, "external", ()):
+            if k5 is None or not len(k5) or sym in getattr(self.broker, "external", ()) or sym in self.quarantine:
                 continue
             if now - int(k5["open_time"].iloc[-1]) > 3 * 300_000:   # stale candles -> never trade on them
                 self.emit("warn", f"{sym}: son mum eski ({(now - int(k5['open_time'].iloc[-1])) // 60000} dk), atlandı")
@@ -238,7 +244,37 @@ class Engine:
                 return (pos.tp if first else min(pos.tp, o)), "Kâr al (TP)"
         return None
 
+    async def _reconcile(self) -> None:
+        """Symbols whose order result was lost: adopt the position if the exchange has it,
+        release the symbol if it is flat, keep it blocked if the exchange cannot be asked."""
+        for sym, sig in list(self.quarantine.items()):
+            try:
+                amt, entry = await self.broker.position_of(sym)
+            except Exception as e:
+                self.emit("error", f"{sym}: pozisyon durumu sorgulanamadı ({e}); sembol kilitli kalıyor")
+                continue
+            del self.quarantine[sym]
+            if amt == 0.0:
+                self.emit("info", f"{sym}: borsada pozisyon yok, sembol serbest")
+                continue
+            d = 1 if amt > 0 else -1
+            dm = self.strategy.params(d)
+            entry = entry or sig.close
+            tp = entry + d * dm.tp_atr * sig.atr if dm.tp_atr else None
+            sl = entry - d * dm.sl_atr * sig.atr if dm.sl_atr else None
+            emergency = None if sl else entry * (1 - d * self.s.emergency_stop_pct / 100)
+            self.positions[sym] = Position(sym, d, abs(amt), entry, self._now(), sig.bar_time, dm.H, tp, sl, emergency,
+                                           abs(amt) * entry / self.s.leverage, abs(amt) * entry * 0.0005, sig.rule)
+            self._persist()
+            try:
+                await self.broker.set_brackets(sym, d, tp, sl or emergency, self.rules[sym])
+            except Exception as e:
+                self.emit("error", f"{sym} koruma emri verilemedi ({e})")
+            self.emit("warn", f"{sym}: yanıtı kaybolan emir borsada dolmuş, pozisyon sahiplenildi ({amt:g} @ {entry:g})")
+
     async def _enter(self, sig) -> None:
+        if self.stop_event.is_set():
+            return
         tot, today = self.realized()
         avail = await self.broker.available_usdt()
         ok, why = self.risk.can_open([p.margin for p in self.positions.values()], tot, today, avail)
@@ -247,15 +283,22 @@ class Engine:
             return
         rules = self.rules[sig.symbol]
         px = await self.market.price(sig.symbol)
+        if self.stop_event.is_set():        # stop / panic arrived while waiting for the price
+            return
         qty, margin = self.risk.size(px, rules, tot)
         if qty <= 0:
             self.emit("warn", f"{sig.symbol}: pozisyon başına bütçe borsanın minimum emir tutarının altında")
             return
         dm = self.strategy.params(sig.direction)
+        if self.stop_event.is_set():
+            return
         try:
             fill = await self.broker.open(sig.symbol, sig.direction, qty, px, rules)
         except Exception as e:
-            self.emit("error", f"{sig.symbol} emir hatası: {e}")
+            # the order may have filled although the response was lost: block the symbol until
+            # the exchange confirms whether a position exists (see _reconcile)
+            self.quarantine[sig.symbol] = sig
+            self.emit("error", f"{sig.symbol} emir hatası: {type(e).__name__}: {e}; borsa ile mutabakat bekleniyor")
             return
         d = sig.direction
         tp = fill.price + d * dm.tp_atr * sig.atr if dm.tp_atr else None
@@ -264,6 +307,7 @@ class Engine:
         pos = Position(sig.symbol, d, fill.qty, fill.price, self._now(), sig.bar_time, dm.H, tp, sl, emergency,
                        fill.qty * fill.price / self.s.leverage, fill.fee, sig.rule)
         self.positions[sig.symbol] = pos
+        self._persist()                      # recorded before anything else can fail
         try:
             await self.broker.set_brackets(sig.symbol, d, tp, sl or emergency, rules)
         except Exception as e:

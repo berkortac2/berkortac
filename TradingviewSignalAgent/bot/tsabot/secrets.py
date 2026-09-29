@@ -94,9 +94,17 @@ class Vault:
             self.path.unlink()
 
 
+KEY_RE = re.compile(r"[A-Za-z0-9]{16,128}")
+
+
+def valid_key(v: str) -> bool:
+    return isinstance(v, str) and KEY_RE.fullmatch(v) is not None
+
+
 def env_keys() -> tuple[Secret, Secret] | None:
-    k, s = os.environ.get("BINANCE_API_KEY", ""), os.environ.get("BINANCE_API_SECRET", "")
-    return (Secret(k), Secret(s)) if k and s else None
+    k = os.environ.get("BINANCE_API_KEY", "").strip()
+    s = os.environ.get("BINANCE_API_SECRET", "").strip()
+    return (Secret(k), Secret(s)) if valid_key(k) and valid_key(s) else None
 
 
 # ------------------------------------------------------------------ log redaction
@@ -127,6 +135,12 @@ class RedactFilter(logging.Filter):
 
     def filter(self, record: logging.LogRecord) -> bool:
         msg = record.getMessage()
+        if record.exc_info:
+            msg += "\n" + logging.Formatter().formatException(record.exc_info)
+            record.exc_info, record.exc_text = None, None
+        if record.stack_info:
+            msg += "\n" + record.stack_info
+            record.stack_info = None
         record.msg, record.args = self.clean(msg), ()
         return True
 

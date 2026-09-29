@@ -97,6 +97,7 @@ function renderStatus(st) {
   $("run-pill").classList.toggle("on", st.running); $("run-text").textContent = st.status;
   $("last-bar").textContent = st.last_bar ? "son mum: " + tstr(st.last_bar) : "";
   $("btn-start").disabled = st.running; $("btn-stop").disabled = !st.running;
+  $("live-pw").classList.toggle("hidden", st.mode !== "live" || st.running);
   const r = $("k-real"); r.textContent = money(st.realized); r.className = "k-val " + cls(st.realized);
   $("k-real-sub").textContent = st.budget ? "bütçeye göre " + fmt(100 * st.realized / st.budget) + " %" : "";
   const t = $("k-today"); t.textContent = money(st.realized_today); t.className = "k-val " + cls(st.realized_today);
@@ -149,8 +150,13 @@ function renderEquity(pts) {
 }
 
 // ---------------------------------------------------------------- actions
-async function act(path, okMsg) { try { await api("POST", path); if (okMsg) toast(okMsg, "ok"); refresh(); } catch (x) { toast(x.message, "err"); } }
-$("btn-start").addEventListener("click", () => act("/api/bot/start", "Bot başlatıldı"));
+async function act(path, okMsg, body) { try { await api("POST", path, body); if (okMsg) toast(okMsg, "ok"); refresh(); } catch (x) { toast(x.message, "err"); } }
+$("btn-start").addEventListener("click", async () => {
+  const live = S.status && S.status.mode === "live";
+  if (live && !confirm("GERÇEK PARA ile işlem başlatılacak. Emin misin?")) return;
+  await act("/api/bot/start", "Bot başlatıldı", live ? { password: $("live-pw").value } : {});
+  $("live-pw").value = "";
+});
 $("btn-stop").addEventListener("click", () => act("/api/bot/stop", "Bot durduruldu"));
 $("btn-panic").addEventListener("click", () => { if (confirm("Botun açtığı TÜM pozisyonlar piyasa fiyatından kapatılacak ve bot duracak. Emin misin?")) act("/api/bot/panic", "Pozisyonlar kapatıldı, bot durdu"); });
 $("btn-reset").addEventListener("click", () => { if (confirm("Paper/replay işlem geçmişi silinsin mi?")) act("/api/bot/reset", "Geçmiş sıfırlandı"); });
