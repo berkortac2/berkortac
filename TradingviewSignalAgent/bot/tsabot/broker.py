@@ -1,0 +1,126 @@
+"""Order execution: simulated (paper/replay) and Binance USDT-M futures (testnet/live)."""
+from __future__ import annotations
+
+import logging
+import time
+from dataclasses import dataclass
+
+from .exchange.binance import BinanceFutures, ExchangeError, SymbolRules
+
+log = logging.getLogger("tsabot.broker")
+TAKER_FEE = 0.0005
+SLIPPAGE = 0.0002
+
+
+@dataclass
+class Fill:
+    price: float
+    qty: float
+    fee: float          # USDT
+
+
+class PaperBroker:
+    """Simulated fills: taker fee 0.05% + 0.02% slippage per side (same as the research)."""
+    simulated = True
+
+    def __init__(self, fee: float = TAKER_FEE, slippage: float = SLIPPAGE):
+        self.fee, self.slip = fee, slippage
+
+    async def prepare(self, symbols, leverage) -> list[str]:
+        return []
+
+    async def available_usdt(self) -> float | None:
+        return None      # only the budget limits paper trading
+
+    async def open(self, symbol: str, direction: int, qty: float, ref_price: float, rules: SymbolRules) -> Fill:
+        px = ref_price * (1 + direction * self.slip)
+        return Fill(px, qty, px * qty * self.fee)
+
+    async def close(self, symbol: str, direction: int, qty: float, ref_price: float, slip: bool = True) -> Fill:
+        px = ref_price * (1 - direction * self.slip) if slip else ref_price
+        return Fill(px, qty, px * qty * self.fee)
+
+    async def set_brackets(self, symbol, direction, tp, sl, rules):
+        return None
+
+    async def cancel_brackets(self, symbol):
+        return None
+
+    async def closed_by_exchange(self, open_syms: dict) -> dict:
+        return {}
+
+
+class BinanceBroker:
+    """Real orders. Positions are one-way, isolated margin, bot-opened only."""
+    simulated = False
+
+    def __init__(self, client: BinanceFutures):
+        self.client = client
+        self.external: set[str] = set()
+        self.prepared: set[str] = set()
+
+    async def prepare(self, symbols, leverage) -> list[str]:
+        """Checks account mode; returns warnings. Symbols with a position the bot did not open are skipped."""
+        warns = []
+        if await self.client.dual_side():
+            raise ExchangeError(0, None, "Hesap Hedge Mode'da. Binance Futures ayarlarından One-way Mode'a geç.")
+        for p in await self.client.positions():
+            if float(p.get("positionAmt", 0)) != 0 and p["symbol"] in symbols:
+                self.external.add(p["symbol"])
+        if self.external:
+            warns.append(f"Elle açılmış pozisyonlar olduğu için atlanıyor: {sorted(self.external)}")
+        self.leverage = leverage
+        return warns
+
+    async def available_usdt(self) -> float | None:
+        acc = await self.client.account()
+        return float(acc.get("availableBalance", 0.0))
+
+    async def _prep_symbol(self, symbol):
+        if symbol not in self.prepared:
+            await self.client.set_isolated(symbol)
+            await self.client.set_leverage(symbol, self.leverage)
+            self.prepared.add(symbol)
+
+    async def open(self, symbol, direction, qty, ref_price, rules) -> Fill:
+        await self._prep_symbol(symbol)
+        r = await self.client.market_order(symbol, "BUY" if direction > 0 else "SELL", qty,
+                                           client_id=f"tsa{int(time.time() * 1000)}")
+        px = float(r.get("avgPrice") or 0) or ref_price
+        q = float(r.get("executedQty") or qty)
+        return Fill(px, q, px * q * TAKER_FEE)
+
+    async def close(self, symbol, direction, qty, ref_price, slip=True) -> Fill:
+        await self.cancel_brackets(symbol)
+        r = await self.client.market_order(symbol, "SELL" if direction > 0 else "BUY", qty, reduce_only=True,
+                                           client_id=f"tsx{int(time.time() * 1000)}")
+        px = float(r.get("avgPrice") or 0) or ref_price
+        q = float(r.get("executedQty") or qty)
+        return Fill(px, q, px * q * TAKER_FEE)
+
+    async def set_brackets(self, symbol, direction, tp, sl, rules):
+        side = "SELL" if direction > 0 else "BUY"
+        if sl:
+            await self.client.conditional_close(symbol, side, "STOP_MARKET", rules.round_price(sl))
+        if tp:
+            await self.client.conditional_close(symbol, side, "TAKE_PROFIT_MARKET", rules.round_price(tp))
+
+    async def cancel_brackets(self, symbol):
+        await self.client.cancel_conditionals(symbol)
+
+    async def closed_by_exchange(self, open_syms: dict) -> dict:
+        """{symbol: Fill} for bot positions that the exchange closed (TP/SL/liquidation)."""
+        if not open_syms:
+            return {}
+        amt = {p["symbol"]: float(p.get("positionAmt", 0)) for p in await self.client.positions()}
+        out = {}
+        for sym, pos in open_syms.items():
+            if amt.get(sym, 0.0) == 0.0:
+                trades = await self.client.user_trades(sym, pos.entry_time_ms)
+                closing = [t for t in trades if (t["side"] == "SELL") == (pos.direction > 0)]
+                q = sum(float(t["qty"]) for t in closing) or pos.qty
+                px = sum(float(t["price"]) * float(t["qty"]) for t in closing) / q if closing else pos.entry_price
+                fee = sum(float(t.get("commission", 0)) for t in closing)
+                await self.cancel_brackets(sym)
+                out[sym] = Fill(px, q, fee)
+        return out

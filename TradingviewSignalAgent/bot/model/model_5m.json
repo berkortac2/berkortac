@@ -1,0 +1,39 @@
+{
+ "name": "TSA 5m kural modeli (v1, ilk ara\u015ft\u0131rma)",
+ "tf": "5m",
+ "version": 1,
+ "long": {
+  "rules": [
+   [
+    [
+     "di",
+     "<=",
+     -0.45836924761533737
+    ],
+    [
+     "atr_pct",
+     ">=",
+     0.7200642794370649
+    ],
+    [
+     "htf_hist_atr",
+     "<=",
+     -0.16961825788021087
+    ]
+   ]
+  ],
+  "H": 24,
+  "tp_atr": null,
+  "sl_atr": null
+ },
+ "short": {
+  "rules": [],
+  "H": 24,
+  "tp_atr": null,
+  "sl_atr": null
+ },
+ "cost_rt": 0.0014,
+ "stats": {
+  "rows": []
+ }
+}
