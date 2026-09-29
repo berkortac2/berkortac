@@ -48,9 +48,15 @@ def main():
             p.update(family=f, group=g)
             summ.append(p)
     summ = pd.DataFrame(summ)
-    tr = summ[summ.group == "train_coins"].copy()
-    tr["rank_key"] = tr.avg_net.fillna(-1) * 1e4 + tr.dir_hit.fillna(0)
-    winner = tr.sort_values("rank_key", ascending=False).family.iloc[0]
+    # pre-registered winner rule (fixed before the locked test was run): highest mean over the 8 TFs of
+    # the locked-test t-statistic of net trade returns on the training coins (missing TF = 0),
+    # tie-break: pooled direction hit
+    keys = {}
+    for f in fams:
+        t = res[(res.family == f) & (res.group == "train_coins")]
+        keys[f] = (t.tstat.fillna(0).sum() / len(TFS), pooled(t).get("dir_hit", 0))
+    winner = max(fams, key=lambda f: keys[f])
+    summ["test_mean_tstat"] = summ.family.map(lambda f: keys[f][0])
     (rep / "winner.json").write_text(json.dumps({"family": winner}, indent=1))
 
     L = []
@@ -130,6 +136,53 @@ def main():
             cells.append(f"{b.score:.2f} / {pct(b.dir_hit)}")
         L.append(f"| {TF_TR[tf]} | " + " | ".join(cells) + " |")
     L.append("")
+
+    # which inputs survive sparse selection most often (all TFs x horizons, walk-forward last fold)
+    from collections import Counter
+    cnt, gimp = Counter(), Counter()
+    n_lists = 0
+    for p in sorted((rep / "search").glob("artifacts_*.json")):
+        a = json.loads(p.read_text())
+        for k, v in a.items():
+            if k.startswith("logit_top20_H"):
+                cnt.update(v["features"])
+                n_lists += 1
+            if k.startswith("gbm_importance_H"):
+                tot = sum(x[1] for x in v) or 1.0
+                for f, g in v:
+                    gimp[f] += g / tot
+    def group(f):
+        if f.startswith(("cc_", "d5_", "z_")):
+            return "korelasyonun korelasyonu"
+        if f.startswith("c_"):
+            return "mum-metrik korelasyon"
+        if f.startswith("m_"):
+            return "metrik-metrik korelasyon"
+        if f.startswith("div"):
+            return "uyumsuzluk"
+        if f.startswith("htf_"):
+            return "üst TF"
+        if f in ("hour_sin", "hour_cos", "dow_sin", "dow_cos"):
+            return "zaman"
+        if f in ("relvol", "vol_z", "svflow10", "svflow30", "cmf20", "vol_trend"):
+            return "hacim"
+        if f in ("body", "upwick", "lowwick", "clv", "range_atr", "ret1_atr", "ret3_atr", "ret5_atr", "ret10_atr",
+                 "streak", "engulf", "pin", "chan20", "chan50", "chan100"):
+            return "mum"
+        return "momentum/volatilite"
+    if n_lists:
+        L.append("## Hangi girdiler gerçekten işe yarıyor?\n")
+        L.append(f"Seyrek (top-20) lojistik modelin {n_lists} ayrı eğitiminde (8 TF × ufuklar) en sık seçilen girdiler "
+                 "ve LightGBM kazanç (gain) payı:\n")
+        L.append("| Girdi | Grup | Top-20'de seçilme | LightGBM kazanç payı (toplam) |")
+        L.append("|---|---|---|---|")
+        for f, c in cnt.most_common(20):
+            L.append(f"| `{f}` | {group(f)} | {c}/{n_lists} | {gimp.get(f, 0):.2f} |")
+        gc = Counter()
+        for f, c in cnt.items():
+            gc[group(f)] += c
+        tot = sum(gc.values())
+        L.append("\nGrup bazında top-20 koltuk payı: " + ", ".join(f"{g} **%{100 * c / tot:.0f}**" for g, c in gc.most_common()) + "\n")
 
     # most important features of the winner
     models = json.loads((rep / "final_models.json").read_text())

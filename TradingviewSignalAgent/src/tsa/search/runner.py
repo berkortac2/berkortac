@@ -297,6 +297,8 @@ class Search:
         t0 = _time.time()
         sets = model_feature_sets(self.names)
         for H in self.horizons:
+            self._outcomes.clear()  # trade-outcome cache is per horizon; keep memory flat
+            self.ds.cache.clear()
             self.log(f"[{self.tf}] H={H} baselines ({_time.time() - t0:.0f}s)")
             self.run_baselines(H)
             logit_last = None
@@ -349,7 +351,19 @@ class Search:
         return self.save()
 
     def save(self):
+        """Write trials; rows of horizons not searched in this run are kept (resume/merge)."""
         df = pd.DataFrame(self.trials)
-        df.to_parquet(self.out / f"trials_{self.tf}.parquet", index=False)
-        (self.out / f"artifacts_{self.tf}.json").write_text(json.dumps(self.artifacts, indent=1, default=str))
+        tp = self.out / f"trials_{self.tf}.parquet"
+        ap = self.out / f"artifacts_{self.tf}.json"
+        arts = dict(self.artifacts)
+        if tp.exists():
+            old = pd.read_parquet(tp)
+            old = old[~old.H.isin(self.horizons)]
+            df = pd.concat([old, df], ignore_index=True)
+        if ap.exists():
+            prev = json.loads(ap.read_text())
+            prev.update(arts)
+            arts = prev
+        df.to_parquet(tp, index=False)
+        ap.write_text(json.dumps(arts, indent=1, default=str))
         return df

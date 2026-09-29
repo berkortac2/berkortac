@@ -55,7 +55,8 @@ def rank_families(trials: pd.DataFrame) -> pd.DataFrame:
         if not per_tf:
             continue
         d = pd.DataFrame(per_tf)
-        rows.append({"family": fam, "n_tf": len(d), "mean_score": d.score.mean(),
+        # a timeframe where the family produced no trial counts as 0 (no edge found)
+        rows.append({"family": fam, "n_tf": len(d), "mean_score": d.score.sum() / len(TFS),
                      "tf_positive": int((d.avg_net > 0).sum()), "mean_dir_hit": d.dir_hit.mean()})
     return pd.DataFrame(rows).sort_values("mean_score", ascending=False).reset_index(drop=True)
 
