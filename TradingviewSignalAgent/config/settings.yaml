@@ -1,0 +1,38 @@
+# Tradingview Signal Agent - research configuration
+data_dir: data/raw
+feature_dir: data/features
+
+# Candidate USDT-M perpetuals; the training basket (top 20 by recent quote
+# volume with >= 3.5y history) and the unseen hold-out coins are picked from
+# these by scripts/01_download.py and written to config/universe.json.
+candidates: [BTCUSDT, ETHUSDT, BNBUSDT, XRPUSDT, ADAUSDT, SOLUSDT, DOGEUSDT, LINKUSDT,
+  LTCUSDT, DOTUSDT, AVAXUSDT, TRXUSDT, BCHUSDT, ETCUSDT, ATOMUSDT, NEARUSDT, FILUSDT,
+  UNIUSDT, AAVEUSDT, XLMUSDT, HBARUSDT, VETUSDT, ALGOUSDT, SANDUSDT, EOSUSDT, CRVUSDT,
+  ICPUSDT, RUNEUSDT, 1000SHIBUSDT, SUIUSDT, APTUSDT, ARBUSDT, OPUSDT, INJUSDT,
+  1000PEPEUSDT, WIFUSDT, TIAUSDT, SEIUSDT, ENAUSDT, TONUSDT, LDOUSDT, FETUSDT, WLDUSDT,
+  ORDIUSDT, TAOUSDT, ONDOUSDT]
+exclude_from_training: []
+n_train: 20
+n_unseen: 6
+train_min_history_start: "2022-01-01"
+
+timeframes:
+  "1m":  {start: "2025-03-01", horizons: [5, 10, 15, 30]}
+  "5m":  {start: "2023-09-01", horizons: [3, 6, 12, 24]}
+  "15m": {start: "2020-01-01", horizons: [4, 8, 16]}
+  "30m": {start: "2020-01-01", horizons: [4, 8, 16]}
+  "1h":  {start: "2019-09-01", horizons: [3, 6, 12, 24]}
+  "4h":  {start: "2019-09-01", horizons: [3, 6, 12]}
+  "1d":  {start: "2019-09-01", horizons: [2, 3, 5, 10]}
+  "1w":  {start: "2019-09-01", horizons: [1, 2, 4]}
+
+# Binance USDT-M taker fee + slippage, per side, in fraction
+fee_per_side: 0.0005
+slippage_per_side: 0.0002
+
+# The last `final_test_frac` of each timeframe's timeline is locked: the search
+# never sees it. Top-3 methods are evaluated there exactly once.
+final_test_frac: 0.20
+walkforward:
+  n_folds: 4
+  embargo_bars: 50

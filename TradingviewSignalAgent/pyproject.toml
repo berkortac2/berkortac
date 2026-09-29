@@ -1,0 +1,8 @@
+[project]
+name = "tradingview-signal-agent"
+version = "1.0.0"
+description = "Replay-trained multi-timeframe buy/sell signal research for Binance USDT-M perpetuals, exported to Pine Script v6"
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

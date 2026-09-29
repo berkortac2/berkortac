@@ -1,0 +1,32 @@
+{
+  "train": [
+    "BTCUSDT",
+    "ETHUSDT",
+    "SOLUSDT",
+    "XRPUSDT",
+    "DOGEUSDT",
+    "BNBUSDT",
+    "NEARUSDT",
+    "UNIUSDT",
+    "ADAUSDT",
+    "LINKUSDT",
+    "AVAXUSDT",
+    "BCHUSDT",
+    "AAVEUSDT",
+    "FILUSDT",
+    "LTCUSDT",
+    "XLMUSDT",
+    "DOTUSDT",
+    "1000SHIBUSDT",
+    "TRXUSDT",
+    "HBARUSDT"
+  ],
+  "unseen": [
+    "1000PEPEUSDT",
+    "SUIUSDT",
+    "ENAUSDT",
+    "WLDUSDT",
+    "TAOUSDT",
+    "ARBUSDT"
+  ]
+}
