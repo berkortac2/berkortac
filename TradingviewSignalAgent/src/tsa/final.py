@@ -273,7 +273,9 @@ def run_final(search_dir: Path, out_dir: Path, top_n: int = 3, tfs=None, log=pri
         fams = top + ["baseline"]
         for fam in fams:
             if fam == "baseline":
-                ref = best_trial(trials, tf, top[0])
+                ref = next((b for b in (best_trial(trials, tf, f) for f in top) if b is not None), None)
+                if ref is None:
+                    continue
                 cand = []
                 for bc in ("baseline:rsi_30_70_cross", "baseline:macd_cross", "baseline:random_2pct"):
                     r = ref.copy()

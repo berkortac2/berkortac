@@ -25,7 +25,8 @@ def main():
     res = pd.read_csv(ROOT / "reports" / "final_results.csv")
     fam = args.family or json.loads((ROOT / "reports" / "winner.json").read_text())["family"]
     tr = res[(res.family == fam) & (res.group == "train_coins")]
-    stats = {r.tf: {"dir_hit": r.dir_hit, "win_rate": r.win_rate, "trades": r.trades} for r in tr.itertuples()}
+    stats = {r.tf: {"dir_hit": r.dir_hit, "win_rate": r.win_rate, "trades": r.trades, "avg_net": r.avg_net}
+             for r in tr.itertuples()}
     label = FAMILY_TR.get(fam, fam)
     out = ROOT / "pine"
     out.mkdir(exist_ok=True)

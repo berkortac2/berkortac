@@ -3,4 +3,3 @@ logs/
 __pycache__/
 *.pyc
 .pytest_cache/
-reports/final_trades.parquet

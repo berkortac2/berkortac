@@ -9,6 +9,30 @@ Pine Script v6 göstergesi ve onu bulan Python araştırma motoru.
 - TradingView kodu: [`pine/TradingviewSignalAgent.pine`](pine/TradingviewSignalAgent.pine) (gösterge) ve
   [`pine/TradingviewSignalAgent_Strategy.pine`](pine/TradingviewSignalAgent_Strategy.pine) (Strategy Tester sürümü)
 
+## Sonuç özeti (kilitli test, komisyon + kayma dahil)
+
+18.466 strateji denemesi, 6 yöntem ailesi. En iyi 3 yöntem: **1) Kural/konfluans araması**, 2) Meta-labeling
+(kural + lojistik onayı), 3) Lojistik skor modeli. Pine'a giden kazanan: **Kural/konfluans araması**.
+
+| TF | Yön isabeti | İşlem kazanma | Net/işlem | İşlem | Görülmemiş coin yön isabeti | Pine'da varsayılan |
+|---|---|---|---|---|---|---|
+| 1 dk | – | – | – | – | – | model yok (komisyon > hareket) |
+| 5 dk | %61.2 | %58.5 | +%0.46 | 183 | %61.2 | açık (sadece AL) |
+| 15 dk | %41.7 | %40.2 | −%0.92 | 127 | %50.5 | kapalı (testte zarar) |
+| 30 dk | %54.0 | %54.0 | +%2.95* | 137 | %57.3 | açık (sadece AL) |
+| 1 saat | %56.5 | %55.4 | +%0.39* | 92 | %58.4 | açık (sadece AL) |
+| 4 saat | %52.8 | %50.8 | +%0.50 | 250 | %59.3 | açık (AL + SAT) |
+| 1 gün | %47.7 | %47.2 | −%0.93 | 235 | %47.7 | kapalı (testte zarar) |
+| 1 hafta | %65.5 | %63.8 | +%1.18 | 58 | %45.0 | açık (AL + SAT) |
+
+\* 30 dk ve 1 saat kârının büyük kısmı 10 Ekim 2025 çöküşündeki tepki alımlarından geliyor; ayrıntı ve
+"en iyi gün hariç" analizi [`reports/SONUCLAR.md`](reports/SONUCLAR.md) içinde. Karşılaştırma: rastgele sinyal
+%48.9, klasik RSI 30/70 %51.1, MACD kesişimi %47.8 yön isabeti ve hepsi komisyon sonrası zararda.
+
+Bulunan ana desen: **yüksek volatilitede (ATR/fiyat yüksek) momentumun sert negatife dönmesi → kısa süreli tepki
+alımı**; 1G/1H kurallarında mum-metrik ve metrik-metrik korelasyonlar (kapanış–MACD, kapanış–RSI, RSI–MFI, RSI–hacim)
+ve MACD uyumsuzluğu belirleyici. SAT kuralları yalnızca 4s, 1G ve 1H'de doğrulamadan geçebildi.
+
 ## TradingView'a kurulum
 
 1. TradingView'da grafiği aç, sembolü Binance perpetual yap: örn. `BINANCE:BTCUSDT.P`.
@@ -27,7 +51,11 @@ Pine Script v6 göstergesi ve onu bulan Python araştırma motoru.
 - Kesikli yeşil/kırmızı çizgiler: ATR tabanlı TP ve SL seviyeleri (ayar: *TP / SL seviyelerini çiz*).
 - Sağ üstte **çoklu zaman dilimi tablosu**: her TF için anlık yön (AL / SAT / –), model skoru,
   kilitli testteki yön isabeti % ve işlem kazanma %, en altta **bu grafikte** geçmişteki canlı isabet.
-- *Eşik çarpanı* > 1 → daha az ama daha seçici sinyal; < 1 → daha sık sinyal.
+- *Sadece kilitli testte kârlı çıkan TF'lerde sinyal ver* (varsayılan açık): 15 dk ve 1 gün testte zarar ettiği
+  için bu TF'lerde etiket basılmaz; kapatırsan her TF'de sinyal üretilir. Tabloda bu TF'lerin kazanç hücresi turuncu ve "!".
+- *Grafikten düşük TF'leri de hesapla* (varsayılan kapalı): örn. 4 saatlik grafikte 5 dk / 15 dk / 30 dk / 1 saat
+  satırlarını da doldurur; uzun geçmişli grafiklerde yükleme süresini artırır.
+- 1 dk grafikte model yoktur (hiçbir yöntem komisyon sonrası kâr üretemedi); tabloda "model yok" yazar.
 
 ## Nasıl bulundu (kısaca)
 

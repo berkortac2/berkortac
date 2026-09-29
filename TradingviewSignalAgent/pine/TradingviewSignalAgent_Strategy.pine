@@ -1,0 +1,356 @@
+//@version=6
+strategy("Tradingview Signal Agent [Strateji]", shorttitle = "TSA-S", overlay = true, initial_capital = 10000, default_qty_type = strategy.percent_of_equity, default_qty_value = 10, commission_type = strategy.commission.percent, commission_value = 0.05, slippage = 2, pyramiding = 0, calc_on_every_tick = false, process_orders_on_close = false, max_labels_count = 500, max_lines_count = 500)
+
+// ============================================================================
+// Tradingview Signal Agent  -  Kural/konfluans araması (RSI-MACD-divergence-hacim-korelasyon)
+// Binance USDT-M perpetual (BINANCE:<COIN>USDT.P) grafikleri icin egitildi.
+// Egitim: 20 coin, purged walk-forward + mum-mum replay; kilitli test donemi ve
+// hic gorulmemis coinlerde dogrulandi. Sinyal sadece KAPANMIS mumda uretilir
+// (repaint yok). Islem: sinyalden sonraki mumun acilisi, ATR tabanli TP/SL,
+// H mum sonra zaman cikisi. Yatirim tavsiyesi degildir.
+// Otomatik uretildi: src/tsa/export/pine_codegen.py
+// ============================================================================
+
+
+grpS = "Sinyal"
+i_thrMult  = 1.0  // kural modeli ikili (AL/SAT/yok) skor uretir; esik carpani kullanilmaz
+i_showTPSL = input.bool(true, "TP / SL seviyelerini ciz", group = grpS)
+i_showScore = input.bool(false, "Skoru etikette goster", group = grpS)
+i_onlyOk   = input.bool(true, "Sadece kilitli testte karli cikan TF'lerde sinyal ver", group = grpS, tooltip = "Kapatilirsa testte zarar eden zaman dilimlerinde de sinyal uretilir")
+grpT = "Coklu zaman dilimi tablosu"
+i_table = input.bool(true, "Tabloyu goster", group = grpT)
+i_tpos = input.string("Sag Ust", "Konum", options = ["Sag Ust", "Sag Alt", "Sol Ust", "Sol Alt"], group = grpT)
+i_ltf  = input.bool(false, "Grafikten dusuk TF'leri de hesapla (yavas)", group = grpT, tooltip = "Acilirsa grafikten kucuk zaman dilimleri de tabloda hesaplanir; uzun gecmisli grafiklerde yuklenme suresini artirir")
+
+
+// ---------- helpers (mirror src/tsa/features/registry.py) ----------
+sdiv(float a, float b) => b > 0 ? a / b : 0.0
+ftanh(float x) =>
+    float e = math.exp(2.0 * math.max(-20.0, math.min(20.0, x)))
+    (e - 1.0) / (e + 1.0)
+zc(float x, float mu, float sd) => math.max(-5.0, math.min(5.0, (nz(x) - mu) / sd))
+decay(bool cond) =>
+    int bs = ta.barssince(cond)
+    na(bs) ? 0.0 : math.max(0.0, 1.0 - bs / 10.0)
+// TradingView "RSI Divergence Indicator" logic (pivot left/right, range 5-60)
+divs(float osc, simple int lbL, simple int lbR) =>
+    bool plF = not na(ta.pivotlow(osc, lbL, lbR))
+    bool phF = not na(ta.pivothigh(osc, lbL, lbR))
+    int bsL = ta.barssince(plF[1])
+    int bsH = ta.barssince(phF[1])
+    bool inL = not na(bsL) and bsL >= 5 and bsL <= 60
+    bool inH = not na(bsH) and bsH >= 5 and bsH <= 60
+    float oR = osc[lbR]
+    float lR = low[lbR]
+    float hR = high[lbR]
+    float plO = ta.valuewhen(plF, oR, 1)
+    float plP = ta.valuewhen(plF, lR, 1)
+    float phO = ta.valuewhen(phF, oR, 1)
+    float phP = ta.valuewhen(phF, hR, 1)
+    bool bull  = plF and lR < plP and oR > plO and inL
+    bool hbull = plF and lR > plP and oR < plO and inL
+    bool bear  = phF and hR > phP and oR < phO and inH
+    bool hbear = phF and hR < phP and oR > phO and inH
+    [bull, hbull, bear, hbear]
+mfi14() =>
+    float ch = ta.change(hlc3)
+    float up = math.sum(volume * (ch <= 0 ? 0.0 : hlc3), 14)
+    float dn = math.sum(volume * (ch >= 0 ? 0.0 : hlc3), 14)
+    dn == 0 ? 100.0 : 100.0 - 100.0 / (1.0 + up / dn)
+lrslope(float src, simple int n) => ta.linreg(src, n, 0) - ta.linreg(src, n, 1)
+
+
+htfTuple() =>
+    [m_, s_, hist_] = ta.macd(close, 12, 26, 9)
+    float hh_ = ta.highest(high, 20)
+    float ll_ = ta.lowest(low, 20)
+    float chan20_ = hh_ > ll_ ? 2.0 * sdiv(close - ll_, hh_ - ll_) - 1.0 : 0.0
+    float a_ = (ta.rsi(close, 14) - 50.0) / 50.0
+    float b_ = sdiv(hist_, ta.atr(14))
+    float c_ = sdiv(close - ta.ema(close, 50), ta.atr(14))
+    // [1] + lookahead_on in the caller = value of the last CLOSED higher-TF bar (no repaint)
+    [a_[1], b_[1], c_[1], chan20_[1]]
+
+pH(simple int tfi) =>
+    switch tfi
+        1 => 24
+        2 => 16
+        3 => 4
+        4 => 3
+        5 => 6
+        6 => 10
+        7 => 2
+        => 10
+pTP(simple int tfi) =>
+    switch tfi
+        1 => 1000000.0
+        2 => 1000000.0
+        3 => 1000000.0
+        4 => 1000000.0
+        5 => 1000000.0
+        6 => 1000000.0
+        7 => 2.0
+        => 1.5
+pSL(simple int tfi) =>
+    switch tfi
+        1 => 1000000.0
+        2 => 1000000.0
+        3 => 1000000.0
+        4 => 1000000.0
+        5 => 1000000.0
+        6 => 1000000.0
+        7 => 1.0
+        => 1.5
+pThrL(simple int tfi) =>
+    switch tfi
+        1 => 0.5
+        2 => 0.5
+        3 => 0.5
+        4 => 0.5
+        5 => 0.5
+        6 => 0.5
+        7 => 0.5
+        => 0.5
+pThrS(simple int tfi) =>
+    switch tfi
+        1 => -0.5
+        2 => -0.5
+        3 => -0.5
+        4 => -0.5
+        5 => -0.5
+        6 => -0.5
+        7 => -0.5
+        => -0.5
+pDirHit(simple int tfi) =>
+    switch tfi
+        1 => 61.2
+        2 => 41.7
+        3 => 54.0
+        4 => 56.5
+        5 => 52.8
+        6 => 47.7
+        7 => 65.5
+        => float(na)
+pWin(simple int tfi) =>
+    switch tfi
+        1 => 58.5
+        2 => 40.2
+        3 => 54.0
+        4 => 55.4
+        5 => 50.8
+        6 => 47.2
+        7 => 63.8
+        => float(na)
+pOk(simple int tfi) =>
+    switch tfi
+        1 => true
+        2 => false
+        3 => true
+        4 => true
+        5 => true
+        6 => false
+        7 => true
+        => false
+htfOf(simple int tfi) =>
+    switch tfi
+        0 => "15"
+        1 => "60"
+        2 => "240"
+        3 => "240"
+        4 => "240"
+        5 => "D"
+        6 => "W"
+        7 => "W"
+        => "D"
+
+tfIndexOf(simple int sec) =>
+    sec <= 90 ? 0 : sec <= 450 ? 1 : sec <= 1350 ? 2 : sec <= 2700 ? 3 : sec <= 7200 ? 4 : sec <= 28800 ? 5 : sec <= 259200 ? 6 : 7
+
+f_model(simple int tfi) =>
+    float atr14 = ta.atr(14)
+    float rsi = ta.rsi(close, 14)
+    [macdL, sigL, hist] = ta.macd(close, 12, 26, 9)
+    float rng = high - low
+    float body = rng > 0 ? (close - open) / rng : 0.0
+    float upw = rng > 0 ? (high - math.max(open, close)) / rng : 0.0
+    float loww = rng > 0 ? (math.min(open, close) - low) / rng : 0.0
+    float ret = close / close[1] - 1.0
+    float vsma20 = ta.sma(volume, 20)
+    float mfiV = mfi14()
+    float ema50 = ta.ema(close, 50)
+    float sv = nz(math.sign(ta.change(close))) * volume
+    float obv = ta.cum(sv)
+    [dip, dim, adxV] = ta.dmi(14, 14)
+    float x_di = nz((dip - dim) / 50.0)
+    float x_atr_pct = nz(sdiv(atr14, close) * 100.0)
+    float x_hist_atr = nz(sdiv(hist, atr14))
+    float x_cmf20 = nz(sdiv(math.sum(sdiv((close - low) - (high - close), rng) * volume, 20), math.sum(volume, 20)))
+    float x_ret5_atr = nz(sdiv(close - close[5], atr14))
+    float x_rsi_z = nz(sdiv(rsi - ta.sma(rsi, 50), ta.stdev(rsi, 50)))
+    float x_rsi7 = nz((ta.rsi(close, 7) - 50.0) / 50.0)
+    float x_ret3_atr = nz(sdiv(close - close[3], atr14))
+    float x_cci = nz(sdiv(hlc3 - ta.sma(hlc3, 20), 0.015 * ta.dev(hlc3, 20)) / 100.0)
+    float x_hist_slope3 = nz(sdiv(hist - hist[3], atr14))
+    float x_atr_ratio = nz(sdiv(ta.atr(5), ta.atr(50)))
+    float x_divc14 = nz(ftanh(sdiv(lrslope(close, 14) * 14.0, 2.0 * atr14)) - ftanh(lrslope(rsi, 14) * 14.0 / 20.0))
+    float wEsa = ta.ema(hlc3, 10)
+    float wD = ta.ema(math.abs(hlc3 - wEsa), 10)
+    float wt1 = ta.ema(sdiv(hlc3 - wEsa, 0.015 * wD), 11)
+    float x_wt_diff = nz((wt1 - ta.sma(wt1, 4)) / 10.0)
+    float x_c_close_hist50 = nz(ta.correlation(close, hist, 50))
+    float x_c_close_hist20 = nz(ta.correlation(close, hist, 20))
+    [histBu, histHBu, histBe, histHBe] = divs(hist, 5, 3)
+    float x_div_hist_bull = nz(decay(histBu))
+    float x_c_close_rsi20 = nz(ta.correlation(close, rsi, 20))
+    float x_c_close_hist10 = nz(ta.correlation(close, hist, 10))
+    float x_m_rsi_mfi10 = nz(ta.correlation(rsi, mfiV, 10))
+    float x_m_rsi_mfi20 = nz(ta.correlation(rsi, mfiV, 20))
+    var float stk = 0.0
+    stk := close > close[1] ? (stk > 0 ? stk + 1 : 1.0) : close < close[1] ? (stk < 0 ? stk - 1 : -1.0) : 0.0
+    float x_streak = nz(math.max(-10.0, math.min(10.0, stk)) / 5.0)
+    float x_m_rsi_vol20 = nz(ta.correlation(rsi, volume, 20))
+    float x_rsi21 = nz((ta.rsi(close, 21) - 50.0) / 50.0)
+    float x_c_ret_vol20 = nz(ta.correlation(ret, volume, 20))
+    [htfA, htfB, htfC, htfD] = request.security(syminfo.tickerid, htfOf(tfi), htfTuple(), lookahead = barmerge.lookahead_on)
+    float x_htf_rsi = nz(htfA)
+    float x_htf_hist_atr = nz(htfB)
+    float x_htf_ema50_dist = nz(htfC)
+    float x_htf_chan20 = nz(htfD)
+    float sc = 0.0
+    switch tfi
+        1 =>
+            bool rl1 = (x_di <= -0.45836925 and x_atr_pct >= 0.72006428 and x_htf_hist_atr <= -0.16961826)
+            bool rs1 = false
+            sc := rl1 ? 1.0 : rs1 ? -1.0 : 0.0
+        2 =>
+            bool rl2 = (x_hist_atr <= -0.16599067 and x_atr_pct >= 1.6197693 and x_cmf20 <= -0.15645525)
+            bool rs2 = false
+            sc := rl2 ? 1.0 : rs2 ? -1.0 : 0.0
+        3 =>
+            bool rl3 = (x_ret5_atr <= -1.5835882 and x_hist_atr <= -0.24758347 and x_atr_pct >= 2.3043181) or (x_rsi_z <= -1.9658951 and x_hist_atr <= -0.24758347 and x_atr_pct >= 2.3043181) or (x_rsi7 <= -0.51865704 and x_hist_atr <= -0.24758347 and x_atr_pct >= 2.3043181)
+            bool rs3 = false
+            sc := rl3 ? 1.0 : rs3 ? -1.0 : 0.0
+        4 =>
+            bool rl4 = (x_ret3_atr <= -0.76452608 and x_hist_atr <= -0.16403973 and x_atr_pct >= 3.212545)
+            bool rs4 = false
+            sc := rl4 ? 1.0 : rs4 ? -1.0 : 0.0
+        5 =>
+            bool rl5 = (x_ret5_atr <= -1.0118499 and x_atr_pct >= 4.0291658 and x_atr_pct >= 5.0986884) or (x_ret5_atr <= -1.0118499 and x_atr_pct >= 5.0986884) or (x_rsi7 <= -0.28273914 and x_atr_pct >= 5.0986884 and x_cci <= -0.97022341)
+            bool rs5 = (x_hist_slope3 >= 0.16380332 and x_atr_ratio >= 1.1916279 and x_divc14 <= -0.6552978) or (x_atr_ratio >= 1.1916279 and x_wt_diff >= 1.1650064 and x_divc14 <= -0.6552978) or (x_hist_slope3 >= 0.1075745 and x_atr_ratio >= 1.1916279 and x_divc14 <= -0.6552978)
+            sc := rl5 ? 1.0 : rs5 ? -1.0 : 0.0
+        6 =>
+            bool rl6 = (x_c_close_hist50 >= 0.7375317)
+            bool rs6 = (x_hist_atr >= 0.19189303 and x_c_close_hist20 <= -0.20088834 and x_c_close_hist50 <= 0.089914815)
+            sc := rl6 ? 1.0 : rs6 ? -1.0 : 0.0
+        7 =>
+            bool rl7 = (x_div_hist_bull > 0.5 and x_c_close_rsi20 >= 0.98154433 and x_c_close_hist10 <= 0.45391441) or (x_c_close_hist50 >= 0.73945999 and x_m_rsi_mfi10 <= 0.29261947 and x_m_rsi_mfi20 <= 0.46902831) or (x_div_hist_bull > 0.5 and x_c_close_hist10 <= 0.45391441)
+            bool rs7 = (x_ret3_atr <= -1.0558788 and x_streak <= -0.80000001 and x_m_rsi_vol20 <= -0.1246269) or (x_ret3_atr <= -1.0558788 and x_streak <= -0.80000001 and x_rsi21 <= -0.15594191) or (x_ret5_atr <= -1.4052205 and x_streak <= -0.80000001 and x_c_ret_vol20 <= -0.10107666)
+            sc := rl7 ? 1.0 : rs7 ? -1.0 : 0.0
+    sc
+
+// ---------------------------------------------------------------- chart timeframe model
+int   CT   = tfIndexOf(timeframe.in_seconds())
+float sc0  = f_model(CT)
+float atrC = ta.atr(14)
+float thrL = pThrL(CT) > 0 ? math.min(pThrL(CT) * i_thrMult, 0.999) : pThrL(CT)
+float thrS = pThrS(CT) < 0 ? math.max(pThrS(CT) * i_thrMult, -0.999) : pThrS(CT)
+bool tfOn = not i_onlyOk or pOk(CT)
+bool rawLong  = tfOn and sc0 > 0
+bool rawShort = tfOn and sc0 < 0
+
+// ---------------------------------------------------------------- one position at a time (identical to the backtest)
+var int   pos    = 0
+var int   sigBar = na
+var float atrSig = na
+var float entry  = na
+var float tpP    = na
+var float slP    = na
+var int   nTr  = 0
+var int   nWin = 0
+var int   nHit = 0
+var int   nDir = 0
+var array<int>   qBar = array.new<int>()
+var array<float> qEnt = array.new<float>()
+var array<int>   qDir = array.new<int>()
+float costRT = 2 * (0.0005 + 0.0002)
+bool  exitNow = false
+bool  timeExit = false
+float exitPx  = na
+if barstate.isconfirmed
+    // direction hit is judged H bars after the signal (close[t+H] vs entry), like the backtest
+    while array.size(qBar) > 0 and bar_index >= array.get(qBar, 0)
+        nDir += 1
+        nHit += array.get(qDir, 0) * (close - array.get(qEnt, 0)) > 0 ? 1 : 0
+        array.shift(qBar)
+        array.shift(qEnt)
+        array.shift(qDir)
+    if pos != 0 and bar_index > sigBar
+        if bar_index == sigBar + 1
+            entry := open
+            tpP := entry + pos * pTP(CT) * atrSig
+            slP := entry - pos * pSL(CT) * atrSig
+            array.push(qBar, sigBar + pH(CT))
+            array.push(qEnt, entry)
+            array.push(qDir, pos)
+            if i_showTPSL and pTP(CT) < 100
+                line.new(bar_index, tpP, bar_index + pH(CT), tpP, color = color.new(color.green, 30), style = line.style_dashed)
+                line.new(bar_index, slP, bar_index + pH(CT), slP, color = color.new(color.red, 30), style = line.style_dashed)
+        if pos == 1
+            if low <= slP
+                exitNow := true
+                exitPx := bar_index > sigBar + 1 ? math.min(slP, open) : slP
+            else if high >= tpP
+                exitNow := true
+                exitPx := bar_index > sigBar + 1 ? math.max(tpP, open) : tpP
+        else
+            if high >= slP
+                exitNow := true
+                exitPx := bar_index > sigBar + 1 ? math.max(slP, open) : slP
+            else if low <= tpP
+                exitNow := true
+                exitPx := bar_index > sigBar + 1 ? math.min(tpP, open) : tpP
+        if not exitNow and bar_index >= sigBar + pH(CT)
+            exitNow := true
+            timeExit := true
+            exitPx := close
+        if exitNow
+            float net = pos * (exitPx / entry - 1) - costRT
+            nTr += 1
+            nWin += net > 0 ? 1 : 0
+            pos := 0
+
+bool longSig  = barstate.isconfirmed and pos == 0 and rawLong
+bool shortSig = barstate.isconfirmed and pos == 0 and rawShort and not longSig
+if longSig or shortSig
+    pos := longSig ? 1 : -1
+    sigBar := bar_index
+    atrSig := atrC
+    string txt = (longSig ? "AL" : "SAT") + (i_showScore ? "\n" + str.tostring(sc0, "#.##") : "")
+    label.new(bar_index, longSig ? low : high, txt, style = longSig ? label.style_label_up : label.style_label_down,
+         color = longSig ? color.new(color.teal, 0) : color.new(color.maroon, 0), textcolor = color.white, size = size.small)
+    alert('{"signal":"' + (longSig ? "BUY" : "SELL") + '","symbol":"' + syminfo.tickerid + '","tf":"' + timeframe.period
+         + '","price":' + str.tostring(close) + ',"atr":' + str.tostring(atrC) + ',"tp_atr":' + str.tostring(pTP(CT))
+         + ',"sl_atr":' + str.tostring(pSL(CT)) + ',"hold_bars":' + str.tostring(pH(CT)) + '}', alert.freq_once_per_bar_close)
+
+alertcondition(longSig, "TSA AL", "TSA AL sinyali: {{ticker}} {{interval}} fiyat {{close}}")
+alertcondition(shortSig, "TSA SAT", "TSA SAT sinyali: {{ticker}} {{interval}} fiyat {{close}}")
+plotshape(longSig, "AL", shape.triangleup, location.belowbar, color.teal, display = display.data_window)
+plotshape(shortSig, "SAT", shape.triangledown, location.abovebar, color.maroon, display = display.data_window)
+plot(sc0, "TSA skor", display = display.data_window)
+
+
+// ---------------------------------------------------------------- strategy orders (Strategy Tester)
+// entry at the next bar open; TP/SL in ticks relative to the real fill (active from the entry bar);
+// time exit at the close of bar t+H
+float tpTicks = pTP(CT) * atrC / syminfo.mintick
+float slTicks = pSL(CT) * atrC / syminfo.mintick
+if timeExit and strategy.position_size != 0
+    strategy.close_all(comment = "zaman", immediately = true)
+if longSig
+    strategy.entry("L", strategy.long)
+    if pTP(CT) < 100
+        strategy.exit("Lx", "L", profit = tpTicks, loss = slTicks)
+if shortSig
+    strategy.entry("S", strategy.short)
+    if pTP(CT) < 100
+        strategy.exit("Sx", "S", profit = tpTicks, loss = slTicks)

@@ -186,7 +186,8 @@ def generate(models: dict, stats: dict, family_label: str, strategy: bool = Fals
             + (f'strategy("Tradingview Signal Agent [Strateji]", shorttitle = "TSA-S", overlay = true, '
                f'initial_capital = 10000, default_qty_type = strategy.percent_of_equity, default_qty_value = 10, '
                f'commission_type = strategy.commission.percent, commission_value = 0.05, slippage = 2, '
-               f'pyramiding = 0, calc_on_every_tick = false, process_orders_on_close = false)\n'
+               f'pyramiding = 0, calc_on_every_tick = false, process_orders_on_close = false, '
+               f'max_labels_count = 500, max_lines_count = 500)\n'
                if strategy else
                'indicator("Tradingview Signal Agent", shorttitle = "TSA", overlay = true, '
                'max_labels_count = 500, max_lines_count = 500)\n'))
@@ -204,10 +205,12 @@ def generate(models: dict, stats: dict, family_label: str, strategy: bool = Fals
 grpS = "Sinyal"
 i_thrMult  = input.float(1.0, "Esik carpani (1.0 = test edilen ayar)", minval = 0.5, maxval = 3.0, step = 0.05, group = grpS, tooltip = "Buyuk deger = daha az ama daha secici sinyal")
 i_showTPSL = input.bool(true, "TP / SL seviyelerini ciz", group = grpS)
-i_showScore = input.bool(false, "Skoru alt panelde degil etikette goster", group = grpS)
+i_showScore = input.bool(false, "Skoru etikette goster", group = grpS)
+i_onlyOk   = input.bool(true, "Sadece kilitli testte karli cikan TF'lerde sinyal ver", group = grpS, tooltip = "Kapatilirsa testte zarar eden zaman dilimlerinde de sinyal uretilir")
 grpT = "Coklu zaman dilimi tablosu"
 i_table = input.bool(true, "Tabloyu goster", group = grpT)
 i_tpos = input.string("Sag Ust", "Konum", options = ["Sag Ust", "Sag Alt", "Sol Ust", "Sol Alt"], group = grpT)
+i_ltf  = input.bool(false, "Grafikten dusuk TF'leri de hesapla (yavas)", group = grpT, tooltip = "Acilirsa grafikten kucuk zaman dilimleri de tabloda hesaplanir; uzun gecmisli grafiklerde yuklenme suresini artirir")
 """
     # per-TF constants
     def sw(fn, vals, typ):
@@ -235,11 +238,13 @@ i_tpos = input.string("Sag Ust", "Konum", options = ["Sag Ust", "Sag Alt", "Sol 
     WR = {tf: _num(round(100 * stats.get(tf, {}).get("win_rate", float("nan")), 1)) if tf in stats else "na" for tf in tfs}
     WR = {k: ("float(na)" if v == "na" else v) for k, v in WR.items()}
     WR["_default"] = "float(na)"
+    OK = {tf: ("true" if stats.get(tf, {}).get("avg_net", -1) > 0 else "false") for tf in tfs}
+    OK["_default"] = "false"
     htf = {tf: f'"{HTF_OF[tf]}"' for tf in TFS}
     htf["_default"] = '"D"'
     consts = "\n".join([
         sw("pH", H, "int"), sw("pTP", TP, "float"), sw("pSL", SL, "float"), sw("pThrL", TL, "float"),
-        sw("pThrS", TS, "float"), sw("pDirHit", DH, "float"), sw("pWin", WR, "float"), sw("htfOf", htf, "string"),
+        sw("pThrS", TS, "float"), sw("pDirHit", DH, "float"), sw("pWin", WR, "float"), sw("pOk", OK, "bool"), sw("htfOf", htf, "string"),
     ])
     rule_family = models[tfs[0]]["family"] in ("rules", "meta")
     tf_index = """
@@ -261,8 +266,10 @@ tfIndexOf(simple int sec) =>
         if tf not in models:
             continue
         tf_rows.append(
-            f'float sHi{i} = request.security(syminfo.tickerid, "{PINE_TF[tf]}", f_model({i})[1], lookahead = barmerge.lookahead_on)\n'
-            f'float sLo{i} = request.security(syminfo.tickerid, "{PINE_TF[tf]}", f_model({i}))\n'
+            f'float sHi{i} = timeframe.in_seconds("{PINE_TF[tf]}") > timeframe.in_seconds() ? '
+            f'request.security(syminfo.tickerid, "{PINE_TF[tf]}", f_model({i})[1], lookahead = barmerge.lookahead_on) : na\n'
+            f'float sLo{i} = i_ltf and timeframe.in_seconds("{PINE_TF[tf]}") < timeframe.in_seconds() ? '
+            f'request.security(syminfo.tickerid, "{PINE_TF[tf]}", f_model({i})) : na\n'
             f'float s{i} = timeframe.in_seconds("{PINE_TF[tf]}") > timeframe.in_seconds() ? sHi{i} : '
             f'timeframe.in_seconds("{PINE_TF[tf]}") == timeframe.in_seconds() ? sc0[1] : sLo{i}')
     tf_rows = "\n".join(tf_rows)
@@ -275,8 +282,9 @@ float sc0  = f_model(CT)
 float atrC = ta.atr(14)
 float thrL = pThrL(CT) > 0 ? math.min(pThrL(CT) * i_thrMult, 0.999) : pThrL(CT)
 float thrS = pThrS(CT) < 0 ? math.max(pThrS(CT) * i_thrMult, -0.999) : pThrS(CT)
-bool rawLong  = {long_cond}
-bool rawShort = {short_cond}
+bool tfOn = not i_onlyOk or pOk(CT)
+bool rawLong  = tfOn and {long_cond}
+bool rawShort = tfOn and {short_cond}
 
 // ---------------------------------------------------------------- one position at a time (identical to the backtest)
 var int   pos    = 0
@@ -294,6 +302,7 @@ var array<float> qEnt = array.new<float>()
 var array<int>   qDir = array.new<int>()
 float costRT = 2 * (0.0005 + 0.0002)
 bool  exitNow = false
+bool  timeExit = false
 float exitPx  = na
 if barstate.isconfirmed
     // direction hit is judged H bars after the signal (close[t+H] vs entry), like the backtest
@@ -330,6 +339,7 @@ if barstate.isconfirmed
                 exitPx := bar_index > sigBar + 1 ? math.min(tpP, open) : tpP
         if not exitNow and bar_index >= sigBar + pH(CT)
             exitNow := true
+            timeExit := true
             exitPx := close
         if exitNow
             float net = pos * (exitPx / entry - 1) - costRT
@@ -362,6 +372,8 @@ plot(sc0, "TSA skor", display = display.data_window)
 // time exit at the close of bar t+H
 float tpTicks = pTP(CT) * atrC / syminfo.mintick
 float slTicks = pSL(CT) * atrC / syminfo.mintick
+if timeExit and strategy.position_size != 0
+    strategy.close_all(comment = "zaman", immediately = true)
 if longSig
     strategy.entry("L", strategy.long)
     if pTP(CT) < 100
@@ -370,8 +382,6 @@ if shortSig
     strategy.entry("S", strategy.short)
     if pTP(CT) < 100
         strategy.exit("Sx", "S", profit = tpTicks, loss = slTicks)
-if strategy.position_size != 0 and bar_index >= sigBar + pH(CT)
-    strategy.close_all(comment = "zaman", immediately = true)
 """
     dir_expr = ("s > 0 ? 1 : s < 0 ? -1 : 0" if rule_family
                 else "(s >= tl and s > 0) ? 1 : (s <= ts and s < 0) ? -1 : 0")
@@ -397,13 +407,21 @@ if i_table and barstate.islast
     r = 1
     for i, tf in enumerate(TFS):
         if tf not in models:
+            table += f"""    table.cell(T, 0, {r}, "{TF_LABEL[tf]}", text_color = color.white, bgcolor = color.new(color.black, 20))
+    table.cell(T, 1, {r}, "model yok", text_color = color.white, bgcolor = color.new(color.gray, 40))
+    table.cell(T, 2, {r}, "-", text_color = color.white, bgcolor = color.new(color.black, 20))
+    table.cell(T, 3, {r}, "-", text_color = color.white, bgcolor = color.new(color.black, 20))
+    table.cell(T, 4, {r}, "-", text_color = color.white, bgcolor = color.new(color.black, 20))
+"""
+            r += 1
             continue
         table += f"""    int d{i} = dirOf(s{i}, {i})
+    bool off{i} = not i_ltf and timeframe.in_seconds("{PINE_TF[tf]}") < timeframe.in_seconds()
     table.cell(T, 0, {r}, "{TF_LABEL[tf]}", text_color = color.white, bgcolor = color.new(color.black, 20))
-    table.cell(T, 1, {r}, d{i} == 1 ? "AL" : d{i} == -1 ? "SAT" : "-", text_color = color.white, bgcolor = d{i} == 1 ? color.teal : d{i} == -1 ? color.maroon : color.new(color.gray, 40))
+    table.cell(T, 1, {r}, off{i} ? "kapali" : d{i} == 1 ? "AL" : d{i} == -1 ? "SAT" : "-", text_color = color.white, bgcolor = d{i} == 1 ? color.teal : d{i} == -1 ? color.maroon : color.new(color.gray, 40))
     table.cell(T, 2, {r}, na(s{i}) ? "-" : str.tostring(s{i}, "#.##"), text_color = color.white, bgcolor = color.new(color.black, 20))
     table.cell(T, 3, {r}, na(pDirHit({i})) ? "-" : str.tostring(pDirHit({i}), "#.#"), text_color = color.white, bgcolor = color.new(color.black, 20))
-    table.cell(T, 4, {r}, na(pWin({i})) ? "-" : str.tostring(pWin({i}), "#.#"), text_color = color.white, bgcolor = color.new(color.black, 20))
+    table.cell(T, 4, {r}, na(pWin({i})) ? "-" : str.tostring(pWin({i}), "#.#") + (pOk({i}) ? "" : " !"), text_color = color.white, bgcolor = pOk({i}) ? color.new(color.black, 20) : color.new(color.orange, 30))
 """
         r += 1
     table += f"""    table.cell(T, 0, {r}, "Bu grafik", text_color = color.white, bgcolor = color.new(color.navy, 0))
@@ -412,6 +430,10 @@ if i_table and barstate.islast
     table.cell(T, 3, {r}, nDir > 0 ? str.tostring(100.0 * nHit / nDir, "#.#") : "-", text_color = color.white, bgcolor = color.new(color.navy, 0))
     table.cell(T, 4, {r}, nTr > 0 ? str.tostring(100.0 * nWin / nTr, "#.#") : "-", text_color = color.white, bgcolor = color.new(color.navy, 0))
 """
+    if rule_family:  # binary rule scores: a threshold multiplier has no meaning
+        inputs = "\n".join(ln if not ln.startswith("i_thrMult") else
+                           "i_thrMult  = 1.0  // kural modeli ikili (AL/SAT/yok) skor uretir; esik carpani kullanilmaz"
+                           for ln in inputs.split("\n"))
     parts = [head, doc, inputs, HELPERS, HTF_FUNC if uses_htf else "", consts, tf_index, model_fn, main]
     parts.append(strat if strategy else table)
     return "\n".join(parts)
