@@ -111,9 +111,9 @@ class Dataset:
 
 
 def load_dataset(tf: str, symbols: list, t_min: int | None = None, t_max: int | None = None,
-                 features: list | None = None, stride: int = 1) -> Dataset:
+                 features: list | None = None, stride: int = 1, feature_dir: str | None = None) -> Dataset:
     cfg = load_cfg()
-    fdir = ROOT / cfg["feature_dir"] / tf
+    fdir = ROOT / (feature_dir or cfg["feature_dir"]) / tf
     parts, syms = [], []
     feat_names = None
     for s in symbols:

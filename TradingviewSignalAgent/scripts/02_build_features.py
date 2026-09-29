@@ -55,11 +55,14 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--tfs", default="1h,4h,1d,1w,30m,15m,5m,1m")
     ap.add_argument("--workers", type=int, default=4)
+    ap.add_argument("--symbols", default="", help="comma list; default = train + unseen")
+    ap.add_argument("--out", default="", help="feature dir override (e.g. data/features_ext)")
     args = ap.parse_args()
     cfg = yaml.safe_load((ROOT / "config" / "settings.yaml").read_text())
     uni = json.loads((ROOT / "config" / "universe.json").read_text())
-    syms = uni["train"] + uni["unseen"]
-    jobs = [(s, tf, str(ROOT / cfg["data_dir"]), str(ROOT / cfg["feature_dir"]))
+    syms = args.symbols.split(",") if args.symbols else uni["train"] + uni["unseen"]
+    fdir = ROOT / (args.out or cfg["feature_dir"])
+    jobs = [(s, tf, str(ROOT / cfg["data_dir"]), str(fdir))
             for tf in args.tfs.split(",") for s in syms
             if (ROOT / cfg["data_dir"] / f"{s}_{tf}.parquet").exists()]
     with ProcessPoolExecutor(args.workers) as ex:

@@ -28,5 +28,41 @@
     "WLDUSDT",
     "TAOUSDT",
     "ARBUSDT"
+  ],
+  "holdout2": [
+    "ONDOUSDT",
+    "INJUSDT",
+    "FETUSDT",
+    "APTUSDT",
+    "ETCUSDT",
+    "OPUSDT",
+    "CRVUSDT",
+    "TIAUSDT",
+    "ICPUSDT",
+    "WIFUSDT"
+  ],
+  "search5m": [
+    "BTCUSDT",
+    "ETHUSDT",
+    "SOLUSDT",
+    "XRPUSDT",
+    "DOGEUSDT",
+    "BNBUSDT",
+    "NEARUSDT",
+    "UNIUSDT",
+    "ADAUSDT",
+    "LINKUSDT",
+    "AVAXUSDT",
+    "BCHUSDT"
+  ],
+  "spot5m": [
+    "BTCUSDT@spot",
+    "ETHUSDT@spot",
+    "BNBUSDT@spot",
+    "XRPUSDT@spot",
+    "ADAUSDT@spot",
+    "LINKUSDT@spot",
+    "LTCUSDT@spot",
+    "DOGEUSDT@spot"
   ]
 }

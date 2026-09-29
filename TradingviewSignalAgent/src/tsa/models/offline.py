@@ -92,7 +92,7 @@ class GBM:
 QS = (0.05, 0.1, 0.2, 0.8, 0.9, 0.95)
 
 
-def make_primitives(X: np.ndarray, feat_names: list, idx: np.ndarray, discrete: set):
+def make_primitives(X: np.ndarray, feat_names: list, idx: np.ndarray, discrete: set, qs=QS):
     """Threshold conditions from *training* quantiles: (feature, op, threshold)."""
     prims = []
     sub = X[_subsample(idx, 200_000, 1)]
@@ -104,8 +104,8 @@ def make_primitives(X: np.ndarray, feat_names: list, idx: np.ndarray, discrete: 
             if (col < 0).any():
                 prims.append((j, "<", 0.0))
             continue
-        qv = np.quantile(col, QS)
-        for q, v in zip(QS, qv):
+        qv = np.quantile(col, qs)
+        for q, v in zip(qs, qv):
             prims.append((j, "<=" if q < 0.5 else ">=", float(v)))
     # de-duplicate identical thresholds
     seen, out = set(), []
