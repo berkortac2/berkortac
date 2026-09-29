@@ -71,6 +71,36 @@ htfTuple() =>
     // [1] + lookahead_on in the caller = value of the last CLOSED higher-TF bar (no repaint)
     [a_[1], b_[1], c_[1], chan20_[1]]
 
+pHs(simple int tfi) =>
+    switch tfi
+        1 => 24
+        2 => 16
+        3 => 4
+        4 => 3
+        5 => 6
+        6 => 10
+        7 => 2
+        => 10
+pTPs(simple int tfi) =>
+    switch tfi
+        1 => 1000000.0
+        2 => 1000000.0
+        3 => 1000000.0
+        4 => 1000000.0
+        5 => 1000000.0
+        6 => 1000000.0
+        7 => 2.0
+        => 1.5
+pSLs(simple int tfi) =>
+    switch tfi
+        1 => 1000000.0
+        2 => 1000000.0
+        3 => 1000000.0
+        4 => 1000000.0
+        5 => 1000000.0
+        6 => 1000000.0
+        7 => 1.0
+        => 1.5
 pH(simple int tfi) =>
     switch tfi
         1 => 24
@@ -162,6 +192,9 @@ htfOf(simple int tfi) =>
         6 => "W"
         7 => "W"
         => "D"
+pHd(simple int tfi, int d) => d < 0 ? pHs(tfi) : pH(tfi)
+pTPd(simple int tfi, int d) => d < 0 ? pTPs(tfi) : pTP(tfi)
+pSLd(simple int tfi, int d) => d < 0 ? pSLs(tfi) : pSL(tfi)
 
 tfIndexOf(simple int sec) =>
     sec <= 90 ? 0 : sec <= 450 ? 1 : sec <= 1350 ? 2 : sec <= 2700 ? 3 : sec <= 7200 ? 4 : sec <= 28800 ? 5 : sec <= 259200 ? 6 : 7
@@ -287,14 +320,14 @@ if barstate.isconfirmed
     if pos != 0 and bar_index > sigBar
         if bar_index == sigBar + 1
             entry := open
-            tpP := entry + pos * pTP(CT) * atrSig
-            slP := entry - pos * pSL(CT) * atrSig
-            array.push(qBar, sigBar + pH(CT))
+            tpP := entry + pos * pTPd(CT, pos) * atrSig
+            slP := entry - pos * pSLd(CT, pos) * atrSig
+            array.push(qBar, sigBar + pHd(CT, pos))
             array.push(qEnt, entry)
             array.push(qDir, pos)
-            if i_showTPSL and pTP(CT) < 100
-                line.new(bar_index, tpP, bar_index + pH(CT), tpP, color = color.new(color.green, 30), style = line.style_dashed)
-                line.new(bar_index, slP, bar_index + pH(CT), slP, color = color.new(color.red, 30), style = line.style_dashed)
+            if i_showTPSL and (pTPd(CT, pos) < 100 or pSLd(CT, pos) < 100)
+                line.new(bar_index, tpP, bar_index + pHd(CT, pos), tpP, color = color.new(color.green, 30), style = line.style_dashed)
+                line.new(bar_index, slP, bar_index + pHd(CT, pos), slP, color = color.new(color.red, 30), style = line.style_dashed)
         if pos == 1
             if low <= slP
                 exitNow := true
@@ -309,7 +342,7 @@ if barstate.isconfirmed
             else if low <= tpP
                 exitNow := true
                 exitPx := bar_index > sigBar + 1 ? math.min(tpP, open) : tpP
-        if not exitNow and bar_index >= sigBar + pH(CT)
+        if not exitNow and bar_index >= sigBar + pHd(CT, pos)
             exitNow := true
             timeExit := true
             exitPx := close
@@ -329,8 +362,8 @@ if longSig or shortSig
     label.new(bar_index, longSig ? low : high, txt, style = longSig ? label.style_label_up : label.style_label_down,
          color = longSig ? color.new(color.teal, 0) : color.new(color.maroon, 0), textcolor = color.white, size = size.small)
     alert('{"signal":"' + (longSig ? "BUY" : "SELL") + '","symbol":"' + syminfo.tickerid + '","tf":"' + timeframe.period
-         + '","price":' + str.tostring(close) + ',"atr":' + str.tostring(atrC) + ',"tp_atr":' + str.tostring(pTP(CT))
-         + ',"sl_atr":' + str.tostring(pSL(CT)) + ',"hold_bars":' + str.tostring(pH(CT)) + '}', alert.freq_once_per_bar_close)
+         + '","price":' + str.tostring(close) + ',"atr":' + str.tostring(atrC) + ',"tp_atr":' + str.tostring(pTPd(CT, pos))
+         + ',"sl_atr":' + str.tostring(pSLd(CT, pos)) + ',"hold_bars":' + str.tostring(pHd(CT, pos)) + '}', alert.freq_once_per_bar_close)
 
 alertcondition(longSig, "TSA AL", "TSA AL sinyali: {{ticker}} {{interval}} fiyat {{close}}")
 alertcondition(shortSig, "TSA SAT", "TSA SAT sinyali: {{ticker}} {{interval}} fiyat {{close}}")

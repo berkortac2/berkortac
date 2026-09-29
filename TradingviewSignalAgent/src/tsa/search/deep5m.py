@@ -36,7 +36,7 @@ RULE_QS = (0.02, 0.05, 0.1, 0.2, 0.3, 0.7, 0.8, 0.9, 0.95, 0.98)
 RULE_VARIANTS = [dict(depth=3, min_support=0.002), dict(depth=3, min_support=0.01),
                  dict(depth=4, min_support=0.002), dict(depth=4, min_support=0.01)]
 BEAM = 40
-RULE_ROWS = 500_000
+RULE_ROWS = 400_000
 QS = [0.005, 0.01, 0.02, 0.05, 0.10]
 MIN_TRADES = 300
 BARS_PER_DAY = 288
@@ -91,7 +91,7 @@ class DeepSearch5m:
             aa = 1e6 if a is None else a
             bb = 1e6 if b is None else b
             net = np.full(ds.n, np.nan, np.float32)
-            ex = np.full(ds.n, -1, np.int64)
+            ex = np.full(ds.n, -1, np.int32)
             hit = np.full(ds.n, np.nan, np.float32)
             for s, e in zip(ds.seg_start, ds.seg_end):
                 if not self.test_mask[s:e].any():
@@ -100,17 +100,31 @@ class DeepSearch5m:
                                             H, aa, bb, self.cost, d)
                 net[s:e], hit[s:e] = n_, h_
                 ex[s:e] = np.where(x_ >= 0, x_ + s, -1)
-            self._out[key] = (net.astype(np.float64), ex, hit.astype(np.float64))
+            self._out[key] = (net, ex, hit)
         return self._out[key]
 
-    def evaluate(self, L, S, H, family, config, extra=None):
+    def evaluate_all(self, signals: dict, H: int):
+        """Barrier-outer loop: only one barrier's outcome arrays live in memory at a time."""
+        live = {}
+        for name, (L, S) in signals.items():
+            L = L & self.test_mask
+            S = S & self.test_mask
+            if L.any() or S.any():
+                live[name] = (L, S)
+        for a, b in BARRIERS:
+            self._out.clear()
+            for name, (L, S) in live.items():
+                self.evaluate(L, S, H, name.split(":")[0], name, barriers=[(a, b)])
+        self._out.clear()
+
+    def evaluate(self, L, S, H, family, config, extra=None, barriers=None):
         ds = self.ds
         L = L & self.test_mask
         S = S & self.test_mask
         if L.sum() + S.sum() == 0:
             return
         days = self.n_test_bars / BARS_PER_DAY
-        for a, b in BARRIERS:
+        for a, b in (barriers or BARRIERS):
             nl, el, hl = self.outcomes(H, a, b, 1)
             ns, es, hs = self.outcomes(H, a, b, -1)
             rows, dirs, nets, hits = simulate(L, S, nl, el, hl, ns, es, hs, ds.seg_start, ds.seg_end)
@@ -239,9 +253,8 @@ class DeepSearch5m:
                 self.artifacts[f"rules_H{H}_{variant_tag(v)}"] = found
             self.log(f"[deep5m] H={H} evaluating {len(signals)} signal sets x {len(BARRIERS)} barriers "
                      f"({_time.time() - t0:.0f}s)")
-            for name, (L, S) in signals.items():
-                fam = name.split(":")[0]
-                self.evaluate(L, S, H, fam, name)
+            del byf_all, byf20, byf_g
+            self.evaluate_all(signals, H)
             del signals
             self.save()
         self.log(f"[deep5m] done {_time.time() - t0:.0f}s trials={len(self.trials)}")

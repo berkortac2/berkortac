@@ -1,0 +1,328 @@
+//@version=6
+// TSA 5m Coin Tarayici - Tradingview Signal Agent. 36 Binance USDT-M perpetual coins on 5 minutes.
+// Signal on the CLOSE of a 5m candle (no repaint): the table shows which coins gave AL (long) / SAT (short),
+// one alert names every coin that just signalled. Use it on a 5 minute chart (any symbol).
+// Rules and parameters come from the replayed walk-forward research (see reports/SONUCLAR.md). 
+// Not investment advice.
+indicator("TSA 5m Coin Tarayici", shorttitle = "TSA Scan 5m", overlay = true, calc_bars_count = 6000)
+
+
+// ---------- helpers (mirror src/tsa/features/registry.py) ----------
+sdiv(float a, float b) => b > 0 ? a / b : 0.0
+ftanh(float x) =>
+    float e = math.exp(2.0 * math.max(-20.0, math.min(20.0, x)))
+    (e - 1.0) / (e + 1.0)
+zc(float x, float mu, float sd) => math.max(-5.0, math.min(5.0, (nz(x) - mu) / sd))
+decay(bool cond) =>
+    int bs = ta.barssince(cond)
+    na(bs) ? 0.0 : math.max(0.0, 1.0 - bs / 10.0)
+// TradingView "RSI Divergence Indicator" logic (pivot left/right, range 5-60)
+divs(float osc, simple int lbL, simple int lbR) =>
+    bool plF = not na(ta.pivotlow(osc, lbL, lbR))
+    bool phF = not na(ta.pivothigh(osc, lbL, lbR))
+    int bsL = ta.barssince(plF[1])
+    int bsH = ta.barssince(phF[1])
+    bool inL = not na(bsL) and bsL >= 5 and bsL <= 60
+    bool inH = not na(bsH) and bsH >= 5 and bsH <= 60
+    float oR = osc[lbR]
+    float lR = low[lbR]
+    float hR = high[lbR]
+    float plO = ta.valuewhen(plF, oR, 1)
+    float plP = ta.valuewhen(plF, lR, 1)
+    float phO = ta.valuewhen(phF, oR, 1)
+    float phP = ta.valuewhen(phF, hR, 1)
+    bool bull  = plF and lR < plP and oR > plO and inL
+    bool hbull = plF and lR > plP and oR < plO and inL
+    bool bear  = phF and hR > phP and oR < phO and inH
+    bool hbear = phF and hR < phP and oR > phO and inH
+    [bull, hbull, bear, hbear]
+mfi14() =>
+    float ch = ta.change(hlc3)
+    float up = math.sum(volume * (ch <= 0 ? 0.0 : hlc3), 14)
+    float dn = math.sum(volume * (ch >= 0 ? 0.0 : hlc3), 14)
+    dn == 0 ? 100.0 : 100.0 - 100.0 / (1.0 + up / dn)
+lrslope(float src, simple int n) => ta.linreg(src, n, 0) - ta.linreg(src, n, 1)
+
+
+// Seeded running averages, identical to ta.rma / ta.ema (SMA seed) but updated only
+// when an hour closes. st = [value, count, sum]
+rmaUpd(array<float> st, float x, int n, bool isEma) =>
+    if not na(x)
+        float cnt = array.get(st, 1) + 1
+        array.set(st, 1, cnt)
+        if cnt <= n
+            array.set(st, 2, array.get(st, 2) + x)
+            if cnt == n
+                array.set(st, 0, array.get(st, 2) / n)
+        else
+            float a = isEma ? 2.0 / (n + 1) : 1.0 / n
+            array.set(st, 0, a * x + (1 - a) * array.get(st, 0))
+    array.get(st, 0)
+
+// 1h context rebuilt from 5m candles: values of the last CLOSED hour, exactly like
+// request.security(sym, "60", expr[1], lookahead_on) in the main indicator.
+hourlyCtx() =>
+    var float cO = na
+    var float cH = na
+    var float cL = na
+    var float cC = na
+    var float pC = na
+    var array<float> sUp = array.from(float(na), 0.0, 0.0)
+    var array<float> sDn = array.from(float(na), 0.0, 0.0)
+    var array<float> sF = array.from(float(na), 0.0, 0.0)
+    var array<float> sS = array.from(float(na), 0.0, 0.0)
+    var array<float> sG = array.from(float(na), 0.0, 0.0)
+    var array<float> sA = array.from(float(na), 0.0, 0.0)
+    var array<float> sE = array.from(float(na), 0.0, 0.0)
+    var array<float> hh = array.new<float>()
+    var array<float> ll = array.new<float>()
+    var float fR = na
+    var float fB = na
+    var float fC = na
+    var float fD = na
+    bool newHour = nz(ta.change(time("60")), 1) != 0
+    if newHour and not na(cC)
+        float ch = na(pC) ? float(na) : cC - pC
+        float up = rmaUpd(sUp, na(ch) ? float(na) : math.max(ch, 0.0), 14, false)
+        float dn = rmaUpd(sDn, na(ch) ? float(na) : -math.min(ch, 0.0), 14, false)
+        float rsiH = na(up) or na(dn) ? float(na) : dn == 0 ? 100.0 : up == 0 ? 0.0 : 100.0 - 100.0 / (1.0 + up / dn)
+        float ef = rmaUpd(sF, cC, 12, true)
+        float es = rmaUpd(sS, cC, 26, true)
+        float macdH = na(ef) or na(es) ? float(na) : ef - es
+        float sigH = rmaUpd(sG, macdH, 9, true)
+        float histH = na(macdH) or na(sigH) ? float(na) : macdH - sigH
+        float tr = na(pC) ? cH - cL : math.max(cH - cL, math.abs(cH - pC), math.abs(cL - pC))
+        float atrH = rmaUpd(sA, tr, 14, false)
+        float e50 = rmaUpd(sE, cC, 50, true)
+        array.push(hh, cH)
+        array.push(ll, cL)
+        if array.size(hh) > 20
+            array.shift(hh)
+            array.shift(ll)
+        float hi20 = array.size(hh) == 20 ? array.max(hh) : na
+        float lo20 = array.size(ll) == 20 ? array.min(ll) : na
+        fR := na(rsiH) ? float(na) : (rsiH - 50.0) / 50.0
+        fB := na(histH) or na(atrH) ? float(na) : sdiv(histH, atrH)
+        fC := na(e50) or na(atrH) ? float(na) : sdiv(cC - e50, atrH)
+        fD := na(hi20) ? float(na) : hi20 > lo20 ? 2.0 * sdiv(cC - lo20, hi20 - lo20) - 1.0 : 0.0
+        pC := cC
+    if newHour or na(cO)
+        cO := open
+        cH := high
+        cL := low
+        cC := close
+    else
+        cH := math.max(cH, high)
+        cL := math.min(cL, low)
+        cC := close
+    [fR, fB, fC, fD]
+
+
+scan() =>
+    float atr14 = ta.atr(14)
+    float rsi = ta.rsi(close, 14)
+    [macdL, sigL, hist] = ta.macd(close, 12, 26, 9)
+    float rng = high - low
+    float body = rng > 0 ? (close - open) / rng : 0.0
+    float upw = rng > 0 ? (high - math.max(open, close)) / rng : 0.0
+    float loww = rng > 0 ? (math.min(open, close) - low) / rng : 0.0
+    float ret = close / close[1] - 1.0
+    float vsma20 = ta.sma(volume, 20)
+    float mfiV = mfi14()
+    float ema50 = ta.ema(close, 50)
+    float sv = nz(math.sign(ta.change(close))) * volume
+    float obv = ta.cum(sv)
+    float x_atr_pct = nz(sdiv(atr14, close) * 100.0)
+    [dip, dim, adxV] = ta.dmi(14, 14)
+    float x_di = nz((dip - dim) / 50.0)
+    [hA, hB, hC, hD] = hourlyCtx()
+    float x_htf_rsi = nz(hA)
+    float x_htf_hist_atr = nz(hB)
+    float x_htf_ema50_dist = nz(hC)
+    float x_htf_chan20 = nz(hD)
+    bool L = (x_di <= -0.45836924761533737 and x_atr_pct >= 0.7200642794370649 and x_htf_hist_atr <= -0.16961825788021087)
+    bool S = false
+    float sig = L ? 1.0 : S ? -1.0 : 0.0
+    // previous (closed) candle + lookahead_on in the caller = no repaint
+    [sig[1], float(time[1]), close[1]]
+
+grp = "Coinler (Binance USDT-M perpetual, en fazla 39)"
+i_holdL = input.int(24, "AL sinyali tabloda kac mum kalsin", minval = 1, group = "Tablo")
+i_holdS = input.int(24, "SAT sinyali tabloda kac mum kalsin", minval = 1, group = "Tablo")
+i_onlyActive = input.bool(false, "Tabloda sadece aktif sinyalleri goster", group = "Tablo")
+i_pos = input.string("Sag Ust", "Tablo konumu", options = ["Sag Ust", "Sag Alt", "Sol Ust", "Sol Alt"], group = "Tablo")
+i_long = input.bool(true, "AL (long) sinyalleri", group = "Sinyal")
+i_short = input.bool(true, "SAT (short) sinyalleri", group = "Sinyal")
+
+sym00 = input.symbol("BINANCE:BTCUSDT.P", "1", group = grp, inline = "c0")
+sym01 = input.symbol("BINANCE:ETHUSDT.P", "2", group = grp, inline = "c0")
+sym02 = input.symbol("BINANCE:SOLUSDT.P", "3", group = grp, inline = "c0")
+sym03 = input.symbol("BINANCE:XRPUSDT.P", "4", group = grp, inline = "c1")
+sym04 = input.symbol("BINANCE:DOGEUSDT.P", "5", group = grp, inline = "c1")
+sym05 = input.symbol("BINANCE:BNBUSDT.P", "6", group = grp, inline = "c1")
+sym06 = input.symbol("BINANCE:NEARUSDT.P", "7", group = grp, inline = "c2")
+sym07 = input.symbol("BINANCE:UNIUSDT.P", "8", group = grp, inline = "c2")
+sym08 = input.symbol("BINANCE:ADAUSDT.P", "9", group = grp, inline = "c2")
+sym09 = input.symbol("BINANCE:LINKUSDT.P", "10", group = grp, inline = "c3")
+sym10 = input.symbol("BINANCE:AVAXUSDT.P", "11", group = grp, inline = "c3")
+sym11 = input.symbol("BINANCE:BCHUSDT.P", "12", group = grp, inline = "c3")
+sym12 = input.symbol("BINANCE:AAVEUSDT.P", "13", group = grp, inline = "c4")
+sym13 = input.symbol("BINANCE:FILUSDT.P", "14", group = grp, inline = "c4")
+sym14 = input.symbol("BINANCE:LTCUSDT.P", "15", group = grp, inline = "c4")
+sym15 = input.symbol("BINANCE:XLMUSDT.P", "16", group = grp, inline = "c5")
+sym16 = input.symbol("BINANCE:DOTUSDT.P", "17", group = grp, inline = "c5")
+sym17 = input.symbol("BINANCE:1000SHIBUSDT.P", "18", group = grp, inline = "c5")
+sym18 = input.symbol("BINANCE:TRXUSDT.P", "19", group = grp, inline = "c6")
+sym19 = input.symbol("BINANCE:HBARUSDT.P", "20", group = grp, inline = "c6")
+sym20 = input.symbol("BINANCE:1000PEPEUSDT.P", "21", group = grp, inline = "c6")
+sym21 = input.symbol("BINANCE:SUIUSDT.P", "22", group = grp, inline = "c7")
+sym22 = input.symbol("BINANCE:ENAUSDT.P", "23", group = grp, inline = "c7")
+sym23 = input.symbol("BINANCE:WLDUSDT.P", "24", group = grp, inline = "c7")
+sym24 = input.symbol("BINANCE:TAOUSDT.P", "25", group = grp, inline = "c8")
+sym25 = input.symbol("BINANCE:ARBUSDT.P", "26", group = grp, inline = "c8")
+sym26 = input.symbol("BINANCE:ONDOUSDT.P", "27", group = grp, inline = "c8")
+sym27 = input.symbol("BINANCE:INJUSDT.P", "28", group = grp, inline = "c9")
+sym28 = input.symbol("BINANCE:FETUSDT.P", "29", group = grp, inline = "c9")
+sym29 = input.symbol("BINANCE:APTUSDT.P", "30", group = grp, inline = "c9")
+sym30 = input.symbol("BINANCE:ETCUSDT.P", "31", group = grp, inline = "c10")
+sym31 = input.symbol("BINANCE:OPUSDT.P", "32", group = grp, inline = "c10")
+sym32 = input.symbol("BINANCE:CRVUSDT.P", "33", group = grp, inline = "c10")
+sym33 = input.symbol("BINANCE:TIAUSDT.P", "34", group = grp, inline = "c11")
+sym34 = input.symbol("BINANCE:ICPUSDT.P", "35", group = grp, inline = "c11")
+sym35 = input.symbol("BINANCE:WIFUSDT.P", "36", group = grp, inline = "c11")
+
+[g00, t00, p00] = request.security(sym00, "5", scan(), lookahead = barmerge.lookahead_on)
+[g01, t01, p01] = request.security(sym01, "5", scan(), lookahead = barmerge.lookahead_on)
+[g02, t02, p02] = request.security(sym02, "5", scan(), lookahead = barmerge.lookahead_on)
+[g03, t03, p03] = request.security(sym03, "5", scan(), lookahead = barmerge.lookahead_on)
+[g04, t04, p04] = request.security(sym04, "5", scan(), lookahead = barmerge.lookahead_on)
+[g05, t05, p05] = request.security(sym05, "5", scan(), lookahead = barmerge.lookahead_on)
+[g06, t06, p06] = request.security(sym06, "5", scan(), lookahead = barmerge.lookahead_on)
+[g07, t07, p07] = request.security(sym07, "5", scan(), lookahead = barmerge.lookahead_on)
+[g08, t08, p08] = request.security(sym08, "5", scan(), lookahead = barmerge.lookahead_on)
+[g09, t09, p09] = request.security(sym09, "5", scan(), lookahead = barmerge.lookahead_on)
+[g10, t10, p10] = request.security(sym10, "5", scan(), lookahead = barmerge.lookahead_on)
+[g11, t11, p11] = request.security(sym11, "5", scan(), lookahead = barmerge.lookahead_on)
+[g12, t12, p12] = request.security(sym12, "5", scan(), lookahead = barmerge.lookahead_on)
+[g13, t13, p13] = request.security(sym13, "5", scan(), lookahead = barmerge.lookahead_on)
+[g14, t14, p14] = request.security(sym14, "5", scan(), lookahead = barmerge.lookahead_on)
+[g15, t15, p15] = request.security(sym15, "5", scan(), lookahead = barmerge.lookahead_on)
+[g16, t16, p16] = request.security(sym16, "5", scan(), lookahead = barmerge.lookahead_on)
+[g17, t17, p17] = request.security(sym17, "5", scan(), lookahead = barmerge.lookahead_on)
+[g18, t18, p18] = request.security(sym18, "5", scan(), lookahead = barmerge.lookahead_on)
+[g19, t19, p19] = request.security(sym19, "5", scan(), lookahead = barmerge.lookahead_on)
+[g20, t20, p20] = request.security(sym20, "5", scan(), lookahead = barmerge.lookahead_on)
+[g21, t21, p21] = request.security(sym21, "5", scan(), lookahead = barmerge.lookahead_on)
+[g22, t22, p22] = request.security(sym22, "5", scan(), lookahead = barmerge.lookahead_on)
+[g23, t23, p23] = request.security(sym23, "5", scan(), lookahead = barmerge.lookahead_on)
+[g24, t24, p24] = request.security(sym24, "5", scan(), lookahead = barmerge.lookahead_on)
+[g25, t25, p25] = request.security(sym25, "5", scan(), lookahead = barmerge.lookahead_on)
+[g26, t26, p26] = request.security(sym26, "5", scan(), lookahead = barmerge.lookahead_on)
+[g27, t27, p27] = request.security(sym27, "5", scan(), lookahead = barmerge.lookahead_on)
+[g28, t28, p28] = request.security(sym28, "5", scan(), lookahead = barmerge.lookahead_on)
+[g29, t29, p29] = request.security(sym29, "5", scan(), lookahead = barmerge.lookahead_on)
+[g30, t30, p30] = request.security(sym30, "5", scan(), lookahead = barmerge.lookahead_on)
+[g31, t31, p31] = request.security(sym31, "5", scan(), lookahead = barmerge.lookahead_on)
+[g32, t32, p32] = request.security(sym32, "5", scan(), lookahead = barmerge.lookahead_on)
+[g33, t33, p33] = request.security(sym33, "5", scan(), lookahead = barmerge.lookahead_on)
+[g34, t34, p34] = request.security(sym34, "5", scan(), lookahead = barmerge.lookahead_on)
+[g35, t35, p35] = request.security(sym35, "5", scan(), lookahead = barmerge.lookahead_on)
+
+var array<string> names = array.new<string>(36, "")
+var array<int> lastDir = array.new<int>(36, 0)
+var array<int> lastBar = array.new<int>(36, -100000)
+var array<float> lastPx = array.new<float>(36, na)
+var array<float> lastT = array.new<float>(36, na)
+upd(int i, string sym, float g, float t, float p) =>
+    string nm = str.replace(str.replace(sym, "BINANCE:", ""), ".P", "")
+    array.set(names, i, nm)
+    string res = ""
+    // a new closed 5m candle of that coin (dedupe when a coin has no fresh candle)
+    float prevT = array.get(lastT, i)
+    if not na(t) and (na(prevT) or t != prevT)
+        array.set(lastT, i, t)
+        int d = g > 0 and i_long ? 1 : g < 0 and i_short ? -1 : 0
+        if d != 0
+            array.set(lastDir, i, d)
+            array.set(lastBar, i, bar_index)
+            array.set(lastPx, i, p)
+            res := (d > 0 ? "L:" : "S:") + nm
+    res
+
+r00 = upd(0, sym00, g00, t00, p00)
+r01 = upd(1, sym01, g01, t01, p01)
+r02 = upd(2, sym02, g02, t02, p02)
+r03 = upd(3, sym03, g03, t03, p03)
+r04 = upd(4, sym04, g04, t04, p04)
+r05 = upd(5, sym05, g05, t05, p05)
+r06 = upd(6, sym06, g06, t06, p06)
+r07 = upd(7, sym07, g07, t07, p07)
+r08 = upd(8, sym08, g08, t08, p08)
+r09 = upd(9, sym09, g09, t09, p09)
+r10 = upd(10, sym10, g10, t10, p10)
+r11 = upd(11, sym11, g11, t11, p11)
+r12 = upd(12, sym12, g12, t12, p12)
+r13 = upd(13, sym13, g13, t13, p13)
+r14 = upd(14, sym14, g14, t14, p14)
+r15 = upd(15, sym15, g15, t15, p15)
+r16 = upd(16, sym16, g16, t16, p16)
+r17 = upd(17, sym17, g17, t17, p17)
+r18 = upd(18, sym18, g18, t18, p18)
+r19 = upd(19, sym19, g19, t19, p19)
+r20 = upd(20, sym20, g20, t20, p20)
+r21 = upd(21, sym21, g21, t21, p21)
+r22 = upd(22, sym22, g22, t22, p22)
+r23 = upd(23, sym23, g23, t23, p23)
+r24 = upd(24, sym24, g24, t24, p24)
+r25 = upd(25, sym25, g25, t25, p25)
+r26 = upd(26, sym26, g26, t26, p26)
+r27 = upd(27, sym27, g27, t27, p27)
+r28 = upd(28, sym28, g28, t28, p28)
+r29 = upd(29, sym29, g29, t29, p29)
+r30 = upd(30, sym30, g30, t30, p30)
+r31 = upd(31, sym31, g31, t31, p31)
+r32 = upd(32, sym32, g32, t32, p32)
+r33 = upd(33, sym33, g33, t33, p33)
+r34 = upd(34, sym34, g34, t34, p34)
+r35 = upd(35, sym35, g35, t35, p35)
+string fired = r00 + "," + r01 + "," + r02 + "," + r03 + "," + r04 + "," + r05 + "," + r06 + "," + r07 + "," + r08 + "," + r09 + "," + r10 + "," + r11 + "," + r12 + "," + r13 + "," + r14 + "," + r15 + "," + r16 + "," + r17 + "," + r18 + "," + r19 + "," + r20 + "," + r21 + "," + r22 + "," + r23 + "," + r24 + "," + r25 + "," + r26 + "," + r27 + "," + r28 + "," + r29 + "," + r30 + "," + r31 + "," + r32 + "," + r33 + "," + r34 + "," + r35
+
+// ---------------------------------------------------------------- alert + table
+string alL = ""
+string alS = ""
+for part in str.split(fired, ",")
+    if str.startswith(part, "L:")
+        alL += (alL == "" ? "" : ", ") + str.substring(part, 2)
+    else if str.startswith(part, "S:")
+        alS += (alS == "" ? "" : ", ") + str.substring(part, 2)
+bool anyNew = alL != "" or alS != ""
+if anyNew and barstate.isrealtime
+    alert("TSA 5m" + (alL != "" ? " | AL: " + alL : "") + (alS != "" ? " | SAT: " + alS : ""), alert.freq_once_per_bar)
+alertcondition(anyNew, "TSA tarayici: yeni sinyal", "TSA 5m tarayici yeni AL/SAT sinyali verdi")
+plotshape(alL != "", "Yeni AL", shape.triangleup, location.bottom, color.teal, display = display.data_window)
+plotshape(alS != "", "Yeni SAT", shape.triangledown, location.top, color.maroon, display = display.data_window)
+
+posOf(string p) =>
+    p == "Sag Ust" ? position.top_right : p == "Sag Alt" ? position.bottom_right : p == "Sol Ust" ? position.top_left : position.bottom_left
+var table T = table.new(posOf(i_pos), 4, 38, border_width = 1)
+if barstate.islast
+    table.clear(T, 0, 0, 3, 37)
+    table.cell(T, 0, 0, "Coin", bgcolor = color.gray, text_color = color.white, text_size = size.small)
+    table.cell(T, 1, 0, "Sinyal", bgcolor = color.gray, text_color = color.white, text_size = size.small)
+    table.cell(T, 2, 0, "Kac mum once", bgcolor = color.gray, text_color = color.white, text_size = size.small)
+    table.cell(T, 3, 0, "Fiyat", bgcolor = color.gray, text_color = color.white, text_size = size.small)
+    int row = 1
+    int nAct = 0
+    for i = 0 to 35
+        int d = array.get(lastDir, i)
+        int ago = bar_index - array.get(lastBar, i)
+        bool act = d != 0 and ago < (d > 0 ? i_holdL : i_holdS)
+        nAct += act ? 1 : 0
+        if act or not i_onlyActive
+            color bg = act ? (d > 0 ? color.teal : color.maroon) : color.new(color.black, 20)
+            table.cell(T, 0, row, array.get(names, i), text_color = color.white, bgcolor = color.new(color.black, 20), text_size = size.small)
+            table.cell(T, 1, row, act ? (d > 0 ? "AL" : "SAT") : "-", text_color = color.white, bgcolor = bg, text_size = size.small)
+            table.cell(T, 2, row, d != 0 and ago < 5000 ? str.tostring(ago) : "-", text_color = color.white, bgcolor = color.new(color.black, 20), text_size = size.small)
+            table.cell(T, 3, row, na(array.get(lastPx, i)) or not act ? "" : str.tostring(array.get(lastPx, i), format.mintick), text_color = color.white, bgcolor = color.new(color.black, 20), text_size = size.small)
+            row += 1
+    table.cell(T, 0, row, timeframe.period == "5" ? str.tostring(nAct) + " aktif sinyal" : "5 dk grafik kullanin!", text_color = color.white, bgcolor = timeframe.period == "5" ? color.navy : color.orange, text_size = size.small)

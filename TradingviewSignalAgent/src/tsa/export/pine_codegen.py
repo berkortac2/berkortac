@@ -242,9 +242,21 @@ i_ltf  = input.bool(false, "Grafikten dusuk TF'leri de hesapla (yavas)", group =
     OK["_default"] = "false"
     htf = {tf: f'"{HTF_OF[tf]}"' for tf in TFS}
     htf["_default"] = '"D"'
+    # optional per-direction parameters for SAT (short); default = same as AL
+    Hs = {tf: str(int(models[tf].get("H_short", models[tf]["H"]))) for tf in tfs}
+    Hs["_default"] = "10"
+    TPs = {tf: _num(models[tf].get("tp_atr_short", models[tf]["tp_atr"]) if models[tf].get("tp_atr_short", models[tf]["tp_atr"]) is not None else 1e6) for tf in tfs}
+    TPs["_default"] = "1.5"
+    SLs = {tf: _num(models[tf].get("sl_atr_short", models[tf]["sl_atr"]) if models[tf].get("sl_atr_short", models[tf]["sl_atr"]) is not None else 1e6) for tf in tfs}
+    SLs["_default"] = "1.5"
     consts = "\n".join([
+        sw("pHs", Hs, "int"), sw("pTPs", TPs, "float"), sw("pSLs", SLs, "float"),
         sw("pH", H, "int"), sw("pTP", TP, "float"), sw("pSL", SL, "float"), sw("pThrL", TL, "float"),
         sw("pThrS", TS, "float"), sw("pDirHit", DH, "float"), sw("pWin", WR, "float"), sw("pOk", OK, "bool"), sw("htfOf", htf, "string"),
+        # defined after pH/pTP/pSL: Pine needs functions declared before use
+        "pHd(simple int tfi, int d) => d < 0 ? pHs(tfi) : pH(tfi)",
+        "pTPd(simple int tfi, int d) => d < 0 ? pTPs(tfi) : pTP(tfi)",
+        "pSLd(simple int tfi, int d) => d < 0 ? pSLs(tfi) : pSL(tfi)",
     ])
     rule_family = models[tfs[0]]["family"] in ("rules", "meta")
     tf_index = """
@@ -315,14 +327,14 @@ if barstate.isconfirmed
     if pos != 0 and bar_index > sigBar
         if bar_index == sigBar + 1
             entry := open
-            tpP := entry + pos * pTP(CT) * atrSig
-            slP := entry - pos * pSL(CT) * atrSig
-            array.push(qBar, sigBar + pH(CT))
+            tpP := entry + pos * pTPd(CT, pos) * atrSig
+            slP := entry - pos * pSLd(CT, pos) * atrSig
+            array.push(qBar, sigBar + pHd(CT, pos))
             array.push(qEnt, entry)
             array.push(qDir, pos)
-            if i_showTPSL and pTP(CT) < 100
-                line.new(bar_index, tpP, bar_index + pH(CT), tpP, color = color.new(color.green, 30), style = line.style_dashed)
-                line.new(bar_index, slP, bar_index + pH(CT), slP, color = color.new(color.red, 30), style = line.style_dashed)
+            if i_showTPSL and (pTPd(CT, pos) < 100 or pSLd(CT, pos) < 100)
+                line.new(bar_index, tpP, bar_index + pHd(CT, pos), tpP, color = color.new(color.green, 30), style = line.style_dashed)
+                line.new(bar_index, slP, bar_index + pHd(CT, pos), slP, color = color.new(color.red, 30), style = line.style_dashed)
         if pos == 1
             if low <= slP
                 exitNow := true
@@ -337,7 +349,7 @@ if barstate.isconfirmed
             else if low <= tpP
                 exitNow := true
                 exitPx := bar_index > sigBar + 1 ? math.min(tpP, open) : tpP
-        if not exitNow and bar_index >= sigBar + pH(CT)
+        if not exitNow and bar_index >= sigBar + pHd(CT, pos)
             exitNow := true
             timeExit := true
             exitPx := close
@@ -357,8 +369,8 @@ if longSig or shortSig
     label.new(bar_index, longSig ? low : high, txt, style = longSig ? label.style_label_up : label.style_label_down,
          color = longSig ? color.new(color.teal, 0) : color.new(color.maroon, 0), textcolor = color.white, size = size.small)
     alert('{{"signal":"' + (longSig ? "BUY" : "SELL") + '","symbol":"' + syminfo.tickerid + '","tf":"' + timeframe.period
-         + '","price":' + str.tostring(close) + ',"atr":' + str.tostring(atrC) + ',"tp_atr":' + str.tostring(pTP(CT))
-         + ',"sl_atr":' + str.tostring(pSL(CT)) + ',"hold_bars":' + str.tostring(pH(CT)) + '}}', alert.freq_once_per_bar_close)
+         + '","price":' + str.tostring(close) + ',"atr":' + str.tostring(atrC) + ',"tp_atr":' + str.tostring(pTPd(CT, pos))
+         + ',"sl_atr":' + str.tostring(pSLd(CT, pos)) + ',"hold_bars":' + str.tostring(pHd(CT, pos)) + '}}', alert.freq_once_per_bar_close)
 
 alertcondition(longSig, "TSA AL", "TSA AL sinyali: {{{{ticker}}}} {{{{interval}}}} fiyat {{{{close}}}}")
 alertcondition(shortSig, "TSA SAT", "TSA SAT sinyali: {{{{ticker}}}} {{{{interval}}}} fiyat {{{{close}}}}")
@@ -370,18 +382,20 @@ plot(sc0, "TSA skor", display = display.data_window)
 // ---------------------------------------------------------------- strategy orders (Strategy Tester)
 // entry at the next bar open; TP/SL in ticks relative to the real fill (active from the entry bar);
 // time exit at the close of bar t+H
-float tpTicks = pTP(CT) * atrC / syminfo.mintick
-float slTicks = pSL(CT) * atrC / syminfo.mintick
+float tpTicksL = pTPd(CT, 1) * atrC / syminfo.mintick
+float slTicksL = pSLd(CT, 1) * atrC / syminfo.mintick
+float tpTicksS = pTPd(CT, -1) * atrC / syminfo.mintick
+float slTicksS = pSLd(CT, -1) * atrC / syminfo.mintick
 if timeExit and strategy.position_size != 0
     strategy.close_all(comment = "zaman", immediately = true)
 if longSig
     strategy.entry("L", strategy.long)
-    if pTP(CT) < 100
-        strategy.exit("Lx", "L", profit = tpTicks, loss = slTicks)
+    if pTPd(CT, 1) < 100 or pSLd(CT, 1) < 100
+        strategy.exit("Lx", "L", profit = tpTicksL, loss = slTicksL)
 if shortSig
     strategy.entry("S", strategy.short)
-    if pTP(CT) < 100
-        strategy.exit("Sx", "S", profit = tpTicks, loss = slTicks)
+    if pTPd(CT, -1) < 100 or pSLd(CT, -1) < 100
+        strategy.exit("Sx", "S", profit = tpTicksS, loss = slTicksS)
 """
     dir_expr = ("s > 0 ? 1 : s < 0 ? -1 : 0" if rule_family
                 else "(s >= tl and s > 0) ? 1 : (s <= ts and s < 0) ? -1 : 0")

@@ -35,10 +35,12 @@ class Store:
             self.db.commit()
             return cur
 
+    TRADE_COLS = ("mode", "symbol", "direction", "qty", "entry_time", "entry_price", "exit_time", "exit_price",
+                  "reason", "fees", "pnl", "margin", "rule")
+
     def add_trade(self, t: dict) -> None:
-        cols = ["mode", "symbol", "direction", "qty", "entry_time", "entry_price", "exit_time", "exit_price",
-                "reason", "fees", "pnl", "margin", "rule"]
-        self._x(f"INSERT INTO trades({','.join(cols)}) VALUES({','.join('?' * len(cols))})", [t[c] for c in cols])
+        self._x("INSERT INTO trades(mode, symbol, direction, qty, entry_time, entry_price, exit_time, exit_price, "
+                "reason, fees, pnl, margin, rule) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", [t[c] for c in self.TRADE_COLS])
 
     def trades(self, mode: str, limit: int = 200) -> list[dict]:
         cur = self._x("SELECT * FROM trades WHERE mode=? ORDER BY exit_time DESC LIMIT ?", (mode, limit))
@@ -79,6 +81,6 @@ class Store:
         return json.loads(r[0]) if r else default
 
     def reset_mode(self, mode: str) -> None:
-        for t in ("trades", "equity"):
-            self._x(f"DELETE FROM {t} WHERE mode=?", (mode,))
+        self._x("DELETE FROM trades WHERE mode=?", (mode,))
+        self._x("DELETE FROM equity WHERE mode=?", (mode,))
         self._x("DELETE FROM kv WHERE k=?", (f"positions:{mode}",))

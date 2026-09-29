@@ -185,9 +185,13 @@ class Engine:
         # 2) signals -----------------------------------------------------------
         loop = asyncio.get_running_loop()
         new = []
+        now = self._now()
         for sym in self.symbols:
             k5, k1 = data.get(sym, (None, None))
-            if k5 is None or sym in getattr(self.broker, "external", ()):
+            if k5 is None or not len(k5) or sym in getattr(self.broker, "external", ()):
+                continue
+            if now - int(k5["open_time"].iloc[-1]) > 3 * 300_000:   # stale candles -> never trade on them
+                self.emit("warn", f"{sym}: son mum eski ({(now - int(k5['open_time'].iloc[-1])) // 60000} dk), atlandı")
                 continue
             sig = await loop.run_in_executor(None, self.strategy.evaluate, sym, k5, k1, self.s.allow_long,
                                              self.s.allow_short)

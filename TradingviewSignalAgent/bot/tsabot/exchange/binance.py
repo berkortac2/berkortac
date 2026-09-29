@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import logging
+import os
 import time
 from dataclasses import dataclass
 from decimal import ROUND_DOWN, Decimal
@@ -22,9 +23,13 @@ from ..secrets import REDACT, Secret
 
 log = logging.getLogger("tsabot.binance")
 
-BASES = {"live": "https://fapi.binance.com", "testnet": "https://demo-fapi.binance.com"}
+TESTNET_BASES = ("https://demo-fapi.binance.com", "https://testnet.binancefuture.com")
+# Binance "Demo Trading" (demo-fapi) is the documented futures test environment; the older
+# testnet.binancefuture.com keys can be used with TSABOT_TESTNET_BASE=https://testnet.binancefuture.com
+_tb = os.environ.get("TSABOT_TESTNET_BASE", TESTNET_BASES[0])
+BASES = {"live": "https://fapi.binance.com", "testnet": _tb if _tb in TESTNET_BASES else TESTNET_BASES[0]}
 SPOT_BASE = "https://api.binance.com"
-ALLOWED_HOSTS = {"fapi.binance.com", "demo-fapi.binance.com", "api.binance.com"}
+ALLOWED_HOSTS = {"fapi.binance.com", "demo-fapi.binance.com", "testnet.binancefuture.com", "api.binance.com"}
 ALLOWED = {
     ("GET", "/fapi/v1/time"), ("GET", "/fapi/v1/exchangeInfo"), ("GET", "/fapi/v1/klines"),
     ("GET", "/fapi/v1/ticker/price"),
@@ -206,7 +211,8 @@ class BinanceFutures:
 
     async def conditional_close(self, symbol: str, side: str, kind: str, trigger: float) -> dict:
         """Exchange-side TP/SL (algo order API, mandatory since 2025-12-09): closes the whole position."""
-        assert kind in ("STOP_MARKET", "TAKE_PROFIT_MARKET")
+        if kind not in ("STOP_MARKET", "TAKE_PROFIT_MARKET"):
+            raise ValueError("only STOP_MARKET / TAKE_PROFIT_MARKET close orders are used")
         return await self.request("POST", "/fapi/v1/algoOrder", {
             "algoType": "CONDITIONAL", "symbol": symbol, "side": side, "type": kind,
             "triggerPrice": f"{trigger:f}".rstrip("0").rstrip("."), "closePosition": "true",
