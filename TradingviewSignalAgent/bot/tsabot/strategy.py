@@ -67,7 +67,7 @@ class Strategy:
 
     @classmethod
     def load(cls, path: Path) -> "Strategy":
-        return cls(json.loads(Path(path).read_text()))
+        return cls(json.loads(Path(path).read_text(encoding="utf-8")))
 
     def params(self, direction: int) -> DirModel:
         return self.long if direction > 0 else self.short

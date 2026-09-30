@@ -169,10 +169,10 @@ class Brk:
         self.opened.append(a[0])
         return Fill(10.0, a[2], 0.0)
 
-    async def set_brackets(self, *a):
+    async def set_brackets(self, *a, **kw):
         pass
 
-    async def ensure_stop(self, *a):
+    async def ensure_stop(self, *a, **kw):
         return True
 
 
@@ -260,7 +260,7 @@ class ProtBroker(Brk):
         super().__init__()
         self.result, self.calls = result, 0
 
-    async def ensure_stop(self, sym, d, stop, rules):
+    async def ensure_stop(self, sym, d, stop, rules, qty=None):
         self.calls += 1
         if isinstance(self.result, Exception):
             raise self.result
@@ -367,7 +367,7 @@ class RecBrk(Brk):
         super().__init__()
         self.stops = []
 
-    async def set_brackets(self, sym, d, tp, stop, rules):
+    async def set_brackets(self, sym, d, tp, stop, rules, qty=None):
         self.stops.append(stop)
 
 

@@ -1,0 +1,4 @@
+# desktop app (own window + system tray); on Windows pywebview also installs pythonnet (WebView2 / Edge)
+pywebview>=5
+pystray>=0.19
+pillow>=10

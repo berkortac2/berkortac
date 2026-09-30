@@ -16,4 +16,4 @@ REPO_ROOT = BOT_ROOT.parent
 if str(REPO_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(REPO_ROOT / "src"))
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"

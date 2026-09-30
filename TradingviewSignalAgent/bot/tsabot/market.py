@@ -17,7 +17,11 @@ KEEP_1H = 400
 
 
 class LiveMarket:
-    """Keeps rolling 5m/1h buffers per symbol from Binance public klines."""
+    """Keeps rolling 5m/1h buffers per symbol from Binance public klines (REST, once per closed bar).
+
+    Polling instead of a websocket on purpose: there is no long-lived socket that can silently die; every
+    request is independent, retried on network errors, and missed bars are fetched again after an outage."""
+    realtime = True
 
     def __init__(self, client: BinanceFutures, delay_s: float = 3.0):
         self.client = client
@@ -70,6 +74,16 @@ class LiveMarket:
 
     async def price(self, symbol: str) -> float:
         return await self.client.price(symbol)
+
+    async def prices(self, symbols) -> dict[str, float]:
+        """Current prices of several symbols in one request."""
+        allp = await self.client.prices()
+        return {s: allp[s] for s in symbols if s in allp}
+
+    def health(self) -> dict:
+        c = self.client
+        return {"net_errors": c.net_errors, "last_ok": c.last_ok, "weight_used": c.limiter.used(),
+                "weight_limit": c.limiter.per_min, "blocked_s": max(0.0, c.blocked_until - time.time())}
 
 
 class ReplayMarket:
@@ -129,3 +143,9 @@ class ReplayMarket:
         d5 = self.d5[symbol]
         i = int(d5.open_time.searchsorted(self.t, side="right"))
         return float(d5.open.iloc[i]) if i < len(d5) else float(d5.close.iloc[-1])
+
+    async def prices(self, symbols) -> dict[str, float]:
+        return {s: await self.price(s) for s in symbols if s in self.d5}
+
+    def health(self) -> dict:
+        return {"net_errors": 0, "last_ok": time.time(), "weight_used": 0, "weight_limit": 0, "blocked_s": 0.0}

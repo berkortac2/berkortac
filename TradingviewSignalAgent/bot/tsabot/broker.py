@@ -3,10 +3,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from dataclasses import dataclass
 
-from .exchange.binance import BinanceFutures, ExchangeError, SymbolRules
+from .exchange.binance import BinanceFutures, ExchangeError, SymbolRules, bot_id, is_bot_order
 
 log = logging.getLogger("tsabot.broker")
 TAKER_FEE = 0.0005
@@ -44,17 +43,29 @@ class PaperBroker:
         px = ref_price * (1 - direction * self.slip) if slip else ref_price
         return Fill(px, qty, px * qty * self.fee)
 
-    async def set_brackets(self, symbol, direction, tp, sl, rules):
+    async def set_brackets(self, symbol, direction, tp, sl, rules, qty=None):
         return None
 
     async def cancel_brackets(self, symbol):
         return None
 
-    async def ensure_stop(self, symbol, direction, stop, rules) -> bool:
+    async def ensure_stop(self, symbol, direction, stop, rules, qty=None) -> bool:
         return True
 
     async def closed_by_exchange(self, open_syms: dict) -> dict:
         return {}
+
+    async def sync_quantities(self, open_syms: dict) -> dict:
+        return {}
+
+    async def release_external(self) -> list[str]:
+        return []
+
+    async def account_view(self) -> dict | None:
+        return None
+
+    def set_leverage(self, leverage: int) -> None:
+        pass
 
 
 class BinanceBroker:
@@ -65,6 +76,14 @@ class BinanceBroker:
         self.client = client
         self.external: set[str] = set()
         self.prepared: set[str] = set()
+        self.leverage = 1
+        self.warned_extra: set[str] = set()
+
+    def set_leverage(self, leverage: int) -> None:
+        """New leverage applies to the next position of every coin (set again before its first order)."""
+        if leverage != self.leverage:
+            self.leverage = leverage
+            self.prepared.clear()
 
     async def prepare(self, symbols, leverage, own=()) -> list[str]:
         """Checks account mode; returns warnings. Symbols with a position the bot did not open
@@ -95,23 +114,21 @@ class BinanceBroker:
 
     async def open(self, symbol, direction, qty, ref_price, rules) -> Fill:
         await self._prep_symbol(symbol)
-        # a stop left over from an earlier position (e.g. its cancel failed) must not close the new one
+        # a stop left over from an earlier bot position (e.g. its cancel failed) must not close the new one
         await self.cancel_brackets(symbol)
-        r = await self.client.market_order(symbol, "BUY" if direction > 0 else "SELL", qty,
-                                           client_id=f"tsa{int(time.time() * 1000)}")
+        r = await self.client.market_order(symbol, "BUY" if direction > 0 else "SELL", qty, client_id=bot_id("O"))
         return await self._filled(symbol, r, ref_price)
 
     async def close(self, symbol, direction, qty, ref_price, slip=True) -> Fill:
         # close FIRST, then remove the exchange stop: if the market order fails the position keeps its stop
         side = "SELL" if direction > 0 else "BUY"
-        r = await self.client.market_order(symbol, side, qty, reduce_only=True,
-                                           client_id=f"tsx{int(time.time() * 1000)}")
+        r = await self.client.market_order(symbol, side, qty, reduce_only=True, client_id=bot_id("C"))
         fill = await self._filled(symbol, r, ref_price)
-        if fill.qty < qty * 0.999:                  # partial fill: close what is really left
+        if fill.qty < qty * 0.999:                  # partial fill: close the rest of the BOT's quantity
             amt, _ = await self.position_of(symbol)
-            if amt != 0.0:
-                r2 = await self.client.market_order(symbol, side, abs(amt), reduce_only=True,
-                                                    client_id=f"tsy{int(time.time() * 1000)}")
+            rest = min(abs(amt), qty - fill.qty) if amt * direction > 0 else 0.0
+            if rest > 0:
+                r2 = await self.client.market_order(symbol, side, rest, reduce_only=True, client_id=bot_id("C"))
                 f2 = await self._filled(symbol, r2, ref_price)
                 q = fill.qty + f2.qty
                 fill = Fill((fill.price * fill.qty + f2.price * f2.qty) / q, q, fill.fee + f2.fee)
@@ -133,25 +150,40 @@ class BinanceBroker:
         px = float(r.get("avgPrice") or 0) or ref_price
         return Fill(px, q, px * q * TAKER_FEE)
 
-    async def set_brackets(self, symbol, direction, tp, sl, rules):
+    async def set_brackets(self, symbol, direction, tp, sl, rules, qty=None):
+        """Reduce-only stop / take-profit for the bot's quantity (never closes the user's own contracts)."""
         side = "SELL" if direction > 0 else "BUY"
         if sl:
-            await self.client.conditional_close(symbol, side, "STOP_MARKET", rules.round_price(sl))
+            await self.client.conditional_close(symbol, side, "STOP_MARKET", rules.round_price(sl), qty)
         if tp:
-            await self.client.conditional_close(symbol, side, "TAKE_PROFIT_MARKET", rules.round_price(tp))
+            await self.client.conditional_close(symbol, side, "TAKE_PROFIT_MARKET", rules.round_price(tp), qty)
 
     async def cancel_brackets(self, symbol):
+        """Only the bot's own conditional orders (client id prefix) are cancelled."""
         await self.client.cancel_conditionals(symbol)
 
-    async def ensure_stop(self, symbol, direction, stop, rules) -> bool:
-        """Makes sure the exchange holds a closing STOP_MARKET for this position.
+    async def ensure_stop(self, symbol, direction, stop, rules, qty=None) -> bool:
+        """Makes sure the exchange holds the bot's STOP_MARKET for this position (right side and quantity).
         False = the price is already beyond the stop (Binance -2021): the caller must close now."""
         side = "SELL" if direction > 0 else "BUY"
-        for o in await self.client.open_conditionals(symbol):
-            if o.get("orderType") == "STOP_MARKET" and o.get("side") == side:
+        mine = [o for o in await self.client.open_conditionals(symbol)
+                if is_bot_order(o) and o.get("orderType") == "STOP_MARKET" and o.get("side") == side]
+
+        def right_qty(o):
+            if qty is None or o.get("closePosition") in (True, "true"):
                 return True
+            try:
+                return abs(float(o.get("quantity") or 0) - qty) <= float(rules.step) / 2
+            except (TypeError, ValueError):
+                return False
+        keep = next((o for o in mine if right_qty(o)), None)
+        for o in mine:
+            if o is not keep:                    # wrong quantity or a duplicate
+                await self.client.cancel_algo(symbol, o.get("algoId"))
+        if keep is not None:
+            return True
         try:
-            await self.client.conditional_close(symbol, side, "STOP_MARKET", rules.round_price(stop))
+            await self.client.conditional_close(symbol, side, "STOP_MARKET", rules.round_price(stop), qty)
         except ExchangeError as e:
             if e.code == -2021:          # "Order would immediately trigger"
                 return False
@@ -166,17 +198,17 @@ class BinanceBroker:
         return 0.0, None
 
     async def closed_by_exchange(self, open_syms: dict) -> dict:
-        """{symbol: Fill} for bot positions that the exchange closed (TP/SL/liquidation).
-        A position is only declared closed after a per-symbol re-check shows it flat."""
+        """{symbol: Fill} for bot positions that the exchange (or the user, by hand) closed completely.
+        A position is only declared closed after a per-symbol re-check shows no contracts on its side."""
         if not open_syms:
             return {}
         amt = {p["symbol"]: float(p.get("positionAmt", 0)) for p in await self.client.positions()}
         out = {}
         for sym, pos in open_syms.items():
-            if amt.get(sym, 0.0) != 0.0:
+            if amt.get(sym, 0.0) * pos.direction > 0:
                 continue
             a, _ = await self.position_of(sym)          # confirm: never act on an incomplete list
-            if a != 0.0:
+            if a * pos.direction > 0:
                 continue
             trades = await self.client.user_trades(sym, pos.entry_time_ms)
             closing = [t for t in trades if (t["side"] == "SELL") == (pos.direction > 0)]
@@ -192,3 +224,51 @@ class BinanceBroker:
             await self.cancel_brackets(sym)
             out[sym] = Fill(px, q, fee)
         return out
+
+    async def sync_quantities(self, open_syms: dict) -> dict:
+        """Positions still open whose size on the exchange differs from the bot's record.
+        Smaller  -> closed partly by hand: {symbol: new qty}; the bot then manages only what is left.
+        Larger   -> the user added contracts by hand: logged once, the bot keeps closing only its own qty."""
+        if not open_syms:
+            return {}
+        amt = {p["symbol"]: float(p.get("positionAmt", 0)) for p in await self.client.positions()}
+        out = {}
+        for sym, pos in open_syms.items():
+            a = amt.get(sym, 0.0) * pos.direction
+            if a <= 0:
+                continue
+            if a < pos.qty * 0.999:
+                out[sym] = a
+            elif a > pos.qty * 1.001 and sym not in self.warned_extra:
+                self.warned_extra.add(sym)
+                log.warning("%s: %.8g contracts on the exchange, bot position is %.8g (added by hand?)", sym, a, pos.qty)
+        return out
+
+    async def release_external(self) -> list[str]:
+        """Coins skipped because of a manual position become tradable again once that position is closed."""
+        if not self.external:
+            return []
+        amt = {p["symbol"]: float(p.get("positionAmt", 0)) for p in await self.client.positions()}
+        freed = sorted(s for s in self.external if amt.get(s, 0.0) == 0.0)
+        self.external.difference_update(freed)
+        return freed
+
+    async def account_view(self) -> dict:
+        """Futures wallet (USDT) and every open position on the account (bot's and the user's)."""
+        acc = await self.client.account()
+        usdt = next((a for a in acc.get("assets", []) if a.get("asset") == "USDT"), {})
+        pos = []
+        for p in await self.client.positions():
+            a = float(p.get("positionAmt", 0) or 0)
+            if a == 0:
+                continue
+            pos.append({"symbol": p.get("symbol"), "amount": a, "entry_price": float(p.get("entryPrice", 0) or 0),
+                        "mark_price": float(p.get("markPrice", 0) or 0),
+                        "unrealized": float(p.get("unRealizedProfit", 0) or 0),
+                        "margin": float(p.get("isolatedMargin", 0) or p.get("initialMargin", 0) or 0),
+                        "notional": float(p.get("notional", 0) or 0)})
+        f = lambda k, d=0.0: float(usdt.get(k, acc.get(k, d)) or 0)   # noqa: E731
+        return {"wallet": f("walletBalance") or float(acc.get("totalWalletBalance", 0) or 0),
+                "available": float(acc.get("availableBalance", 0) or 0),
+                "margin_balance": f("marginBalance") or float(acc.get("totalMarginBalance", 0) or 0),
+                "unrealized": float(acc.get("totalUnrealizedProfit", 0) or 0), "positions": pos}

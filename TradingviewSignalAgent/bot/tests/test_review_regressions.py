@@ -143,10 +143,10 @@ class FakeBroker:
     async def close(self, sym, d, qty, px, slip=True):
         return Fill(px, qty, 0.0)
 
-    async def set_brackets(self, *a):
+    async def set_brackets(self, *a, **kw):
         self.brackets.append(a)
 
-    async def ensure_stop(self, sym, d, stop, rules):
+    async def ensure_stop(self, sym, d, stop, rules, qty=None):
         self.brackets.append((sym, d, None, stop))
         return True
 

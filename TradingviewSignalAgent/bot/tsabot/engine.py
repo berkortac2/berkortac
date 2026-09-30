@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import logging
+import time
 from collections import deque
 from dataclasses import asdict, dataclass
 
@@ -25,6 +26,12 @@ from .strategy import Signal, Strategy
 log = logging.getLogger("tsabot.engine")
 DAY_MS = 86_400_000
 BAR_MS = 300_000
+
+
+def day_start_ms(ms: int) -> int:
+    """Local midnight (the computer's time zone) of the day that contains `ms`."""
+    d = dt.datetime.fromtimestamp(ms / 1000, dt.timezone.utc).astimezone()
+    return int(d.replace(hour=0, minute=0, second=0, microsecond=0).timestamp() * 1000)
 
 
 def transient(e: Exception) -> bool:
@@ -84,11 +91,28 @@ class Engine:
         self.quarantine: dict[str, Signal] = {
             k: Signal(**{**v, "features": {}}) for k, v in (store.get(f"pending:{self.mode}", {}) or {}).items()}
         self.verify_stops = True                  # check every exchange stop on the first bar after a start
+        self.entries = True                       # False = "stop": no new positions, open ones are still managed
+        self.op_lock = asyncio.Lock()             # one bar decision / manual close at a time
+        self.listeners: list = []                 # fn(kind, data) - Telegram, tray notifications
+        self.price_task: asyncio.Task | None = None
+        self.price_ts: int | None = None
+        self.net_fail_since: float | None = None
+        self.net_alerted = False
+        self.bar_count = 0
 
     # ---------------------------------------------------------------- lifecycle
     @property
     def running(self) -> bool:
         return self.task is not None and not self.task.done()
+
+    @property
+    def state(self) -> str:
+        """running | draining (no new entries, open positions managed) | starting | stopped"""
+        if not self.running:
+            return "stopped"
+        if self.status_msg == "Başlatılıyor":
+            return "starting"
+        return "running" if self.entries else "draining"
 
     def emit(self, level: str, msg: str) -> None:
         msg = REDACT.clean(msg)
@@ -96,6 +120,15 @@ class Engine:
         self.store.event(level, msg, ts)
         self.feed.appendleft({"ts": ts, "level": level, "msg": msg})
         getattr(log, "warning" if level == "warn" else "error" if level == "error" else "info")(msg)
+        if level == "error":
+            self._notify("error", msg=msg)
+
+    def _notify(self, kind: str, **data) -> None:
+        for fn in list(self.listeners):
+            try:
+                fn(kind, {**data, "mode": self.mode})
+            except Exception as e:           # a notification must never disturb trading
+                log.warning("notification failed: %s", REDACT.clean(str(e))[:200])
 
     def _now(self) -> int:
         try:
@@ -104,32 +137,94 @@ class Engine:
             return int(dt.datetime.now(dt.timezone.utc).timestamp() * 1000)
 
     async def start(self) -> None:
+        self.entries = True
         if self.running:
             return
         self.stop_event.clear()
         self.task = asyncio.create_task(self._run())
+        if getattr(self.market, "realtime", False):
+            self.price_task = asyncio.create_task(self._price_loop())
 
     async def stop(self) -> None:
+        """Full stop: the loop ends. Open positions stay on the exchange with their stop orders."""
         self.stop_event.set()
         if self.task:
             try:
                 await asyncio.wait_for(self.task, timeout=90)
             except (asyncio.TimeoutError, asyncio.CancelledError):
                 self.task.cancel()
+        if self.price_task:
+            self.price_task.cancel()
+            self.price_task = None
         self.status_msg = "Durduruldu"
+
+    async def pause(self) -> str:
+        """'Stop' that keeps looking after open positions: no new entries; exit signal, time exit and the
+        stop still close the open positions, and the loop ends by itself when none is left."""
+        self.entries = False
+        if not self.running:
+            return "stopped"
+        if not self.positions and not self.quarantine:
+            await self.stop()
+            self.emit("info", "Bot durduruldu")
+            return "stopped"
+        self.emit("info", f"Yeni işlem açma durduruldu; {len(self.positions)} açık pozisyon kurallarına göre "
+                          "kapatılana kadar yönetilecek")
+        return "draining"
+
+    async def close_positions(self, symbols=None, reason: str = "Elle kapatıldı") -> dict:
+        """Closes bot positions at market (all, or the given symbols). Never touches the user's own positions.
+        Returns {symbol: "ok" | error text}."""
+        out = {}
+        async with self.op_lock:
+            for sym in (list(self.positions) if symbols is None else list(symbols)):
+                pos = self.positions.get(sym)
+                if pos is None:
+                    out[sym] = "Botun bu coinde açık pozisyonu yok"
+                    continue
+                try:
+                    px = await self.market.price(sym)
+                    await self._exit(sym, await self.broker.close(sym, pos.direction, pos.qty, px), reason)
+                    out[sym] = "ok"
+                except Exception as e:              # keep closing the others
+                    out[sym] = REDACT.clean(f"{type(e).__name__}: {e}")[:200]
+                    self.emit("error", f"{sym} kapatılamadı: {out[sym]}")
+            self._persist()
+        if not self.entries and self.running and not self.positions and not self.quarantine:
+            self.stop_event.set()
+        return out
 
     async def panic(self) -> None:
         """Stop the loop FIRST (no entry can start afterwards), then close every bot position."""
+        self.entries = False
         self.stop_event.set()
         await self.stop()
-        for sym in list(self.positions):
+        await self.close_positions(reason="Acil kapatma")
+
+    def apply_settings(self, s: Settings) -> None:
+        """Risk settings changed while running: budget, slots and limits apply to the next decision,
+        leverage and stop % to the next position. Open positions keep their stops."""
+        self.s = s
+        self.risk = Risk(s)
+        if hasattr(self.broker, "set_leverage"):
+            self.broker.set_leverage(s.leverage)
+
+    async def _price_loop(self) -> None:
+        """Current prices of the open positions every 10 s (one request, weight 2) for the live K/Z."""
+        while not self.stop_event.is_set():
             try:
-                px = await self.market.price(sym)
-                await self._exit(sym, await self.broker.close(sym, self.positions[sym].direction,
-                                                              self.positions[sym].qty, px), "Acil kapatma")
-            except Exception as e:  # keep closing the others
-                self.emit("error", f"{sym} kapatılamadı: {e}")
-        self._persist()
+                await asyncio.wait_for(self.stop_event.wait(), timeout=10)
+                return
+            except asyncio.TimeoutError:
+                pass
+            if not self.positions:
+                continue
+            try:
+                px = await self.market.prices(list(self.positions))
+                self.last_prices.update(px)
+                self.price_ts = self._now()
+            except Exception:
+                pass                                 # the bar loop reports connection problems
 
     async def _run(self) -> None:
         try:
@@ -153,10 +248,12 @@ class Engine:
                 try:
                     await self.on_bar()
                     self.errors = 0
+                    self._net_ok()
                 except Exception as e:
                     if transient(e):
                         # internet / Binance outage: keep running (exchange stops protect open positions)
                         self.emit("warn", f"Bağlantı sorunu, sonraki mumda tekrar denenecek: {type(e).__name__}: {e}")
+                        self._net_failed()
                         continue
                     self.errors += 1
                     self.emit("error", f"Döngü hatası: {type(e).__name__}: {e}")
@@ -170,13 +267,44 @@ class Engine:
             self.emit("error", f"Başlatma hatası: {type(e).__name__}: {e}")
         finally:
             self.status_msg = "Durduruldu"
+            if self.price_task:
+                self.price_task.cancel()
+                self.price_task = None
+            self._notify("stopped", positions=len(self.positions))
+
+    def _net_failed(self) -> None:
+        now = time.time()
+        self.net_fail_since = self.net_fail_since or now
+        if not self.net_alerted and now - self.net_fail_since >= 600:
+            self.net_alerted = True
+            self._notify("net_down", minutes=int((now - self.net_fail_since) // 60), positions=len(self.positions))
+
+    def _net_ok(self) -> None:
+        if self.net_alerted:
+            self._notify("net_up", minutes=int((time.time() - self.net_fail_since) // 60))
+        self.net_fail_since, self.net_alerted = None, False
 
     # ---------------------------------------------------------------- per bar
     def realized(self) -> tuple[float, float]:
+        """(net result of the current budget period, net result of today) - both drive the risk limits."""
         now = self._now()
-        return self.store.realized(self.mode), self.store.realized(self.mode, now - now % DAY_MS)
+        return self.store.realized(self.mode, int(self.s.budget_set_at or 0)), \
+            self.store.realized(self.mode, day_start_ms(now))
+
+    def active_symbols(self) -> list[str]:
+        if self.entries:
+            return self.symbols
+        return [s for s in self.symbols if s in self.positions or s in self.quarantine]
 
     async def on_bar(self) -> None:
+        async with self.op_lock:
+            await self._on_bar()
+        if not self.entries and not self.positions and not self.quarantine and not self.stop_event.is_set():
+            self.emit("info", "Açık pozisyon kalmadı, bot durdu")
+            self.stop_event.set()
+
+    async def _on_bar(self) -> None:
+        self.bar_count += 1
         data = {}
         failed = {}
         sem = asyncio.Semaphore(8)
@@ -187,7 +315,7 @@ class Engine:
                     data[sym] = await self.market.update(sym)
                 except Exception as e:          # one bad symbol must not stop the others
                     failed[sym] = e
-        await asyncio.gather(*(upd(s) for s in self.symbols))
+        await asyncio.gather(*(upd(s) for s in self.active_symbols()))
         if failed:
             if not data:
                 raise next(iter(failed.values()))
@@ -200,13 +328,14 @@ class Engine:
                 self.last_bar_ms = int(k5["open_time"].iloc[-1])
 
         await self._reconcile()
+        await self._sync_exchange()
         await self._protect()
 
         # 1) evaluate the closed bar for every coin (entry AND exit rules) -----------------------------------------------------------
         loop = asyncio.get_running_loop()
         new = []
         now = self._now()
-        for sym in self.symbols:
+        for sym in self.active_symbols():
             k5, k1 = data.get(sym, (None, None))
             if k5 is None or not len(k5) or sym in getattr(self.broker, "external", ()) or sym in self.quarantine:
                 continue
@@ -219,14 +348,15 @@ class Engine:
                 continue
             self.signals[sym] = {"symbol": sym, "bar_time": sig.bar_time, "direction": sig.direction,
                                  "rule": sig.rule, "close": sig.close, "atr": sig.atr, "features": sig.features}
-            if sig.direction != 0:
-                self.emit("signal", f"{sym} {'AL (long)' if sig.direction > 0 else 'SAT (short)'} sinyali, "
-                                    f"kural #{sig.rule + 1}, kapanış {sig.close:g}")
+            if sig.direction != 0 and self.entries:
+                # kept even when the coin still has a position: if that position exits on this bar (step 2),
+                # the new one opens at the next open, exactly like the research backtest
+                if sym not in self.positions:
+                    self.emit("signal", f"{sym} {'AL (long)' if sig.direction > 0 else 'SAT (short)'} sinyali, "
+                                        f"kural #{sig.rule + 1}, kapanış {sig.close:g}")
                 new.append(sig)
 
-        # 2) exits: exchange/paper TP-SL, indicator exit (ÇIK), time -------------------------------------------------------------
-        for sym, fill in (await self.broker.closed_by_exchange(dict(self.positions))).items():
-            await self._exit(sym, fill, "TP/SL (borsa)")
+        # 2) exits: paper TP-SL, indicator exit (ÇIK), time (exchange-side closes: _sync_exchange) ----------------
         for sym, pos in list(self.positions.items()):
             k5 = data.get(sym, (None,))[0]
             if k5 is None or not len(k5):
@@ -255,17 +385,47 @@ class Engine:
 
         # 3) entries -----------------------------------------------------------
         for sig in new:
-            if sig.symbol not in self.positions:
+            if sig.symbol not in self.positions and self.entries:
                 await self._enter(sig)
         self._persist()
         tot, _ = self.realized()
         unreal = sum(p.direction * (self.last_prices.get(s, p.entry_price) - p.entry_price) * p.qty
                      for s, p in self.positions.items())
-        self.store.add_equity(self._now(), self.mode, self.s.budget_usdt + tot + unreal, tot)
+        self.store.add_equity(self._now(), self.mode, self.s.budget_usdt + tot + unreal, tot,
+                              budget=self.s.budget_usdt, pnl=self.store.realized(self.mode) + unreal)
         reason = self.risk.stop_reason(tot)
         if reason:
             self.emit("error", reason)
             self.stop_event.set()
+
+    async def _sync_exchange(self) -> None:
+        """Positions closed on the exchange (stop / TP / by hand / liquidation), positions reduced by hand,
+        and coins whose manual position is gone again."""
+        for sym, fill in (await self.broker.closed_by_exchange(dict(self.positions))).items():
+            pos = self.positions.get(sym)
+            why = "Borsada kapandı (elle / tasfiye)"
+            if pos is not None:
+                st = pos.stop_price()
+                if st and abs(fill.price / st - 1) < 0.004:
+                    why = "Zarar kes (borsadaki stop)"
+                elif pos.tp and abs(fill.price / pos.tp - 1) < 0.004:
+                    why = "Kâr al (borsadaki TP)"
+            await self._exit(sym, fill, why)
+        sync = getattr(self.broker, "sync_quantities", None)
+        if sync and self.positions:
+            for sym, qty in (await sync(dict(self.positions))).items():
+                pos = self.positions[sym]
+                self.emit("warn", f"{sym}: pozisyonun bir kısmı borsada elle kapatılmış ({pos.qty:g} → {qty:g}); "
+                                  "bot kalan miktarı yönetiyor")
+                pos.fee_in *= qty / pos.qty
+                pos.margin *= qty / pos.qty
+                pos.qty = qty
+                pos.protected = False                 # stop order is placed again for the new quantity
+            self._persist()
+        rel = getattr(self.broker, "release_external", None)
+        if rel and getattr(self.broker, "external", None):
+            for sym in await rel():
+                self.emit("info", f"{sym}: elle açılan pozisyon kapanmış, bot bu coinde yeniden işlem yapabilir")
 
     @staticmethod
     def _bracket_hit(pos: Position, bar) -> tuple[float, str] | None:
@@ -313,7 +473,7 @@ class Engine:
             self._persist()
             if tp:
                 try:
-                    await self.broker.set_brackets(sym, d, tp, None, self.rules[sym])
+                    await self.broker.set_brackets(sym, d, tp, None, self.rules[sym], qty=abs(amt))
                 except Exception as e:
                     self.emit("error", f"{sym} kâr al emri verilemedi ({e})")
             self.emit("warn", f"{sym}: yanıtı kaybolan emir borsada dolmuş, pozisyon sahiplenildi ({amt:g} @ {entry:g})")
@@ -328,7 +488,7 @@ class Engine:
             if pos.protected and not self.verify_stops:
                 continue
             try:
-                ok = await self.broker.ensure_stop(sym, pos.direction, pos.stop_price(), self.rules[sym])
+                ok = await self.broker.ensure_stop(sym, pos.direction, pos.stop_price(), self.rules[sym], qty=pos.qty)
                 if ok:
                     if not pos.protected:
                         self.emit("info", f"{sym}: stop emri borsada kuruldu ({pos.stop_price():.6g})")
@@ -337,6 +497,7 @@ class Engine:
                     px = await self.market.price(sym)
                     await self._exit(sym, await self.broker.close(sym, pos.direction, pos.qty, px),
                                      "Stop seviyesi geçilmişti (koruma)")
+                    continue
             except Exception as e:
                 all_ok = False
                 pos.protected = False
@@ -350,7 +511,7 @@ class Engine:
         self.store.put(f"pending:{self.mode}", {k: {**asdict(v), "features": {}} for k, v in self.quarantine.items()})
 
     async def _enter(self, sig) -> None:
-        if self.stop_event.is_set():
+        if self.stop_event.is_set() or not self.entries:
             return
         tot, today = self.realized()
         avail = await self.broker.available_usdt()
@@ -395,7 +556,7 @@ class Engine:
         self.quarantine.pop(sig.symbol, None)
         self._persist_pending()
         try:
-            await self.broker.set_brackets(sig.symbol, d, tp, stop, rules)
+            await self.broker.set_brackets(sig.symbol, d, tp, stop, rules, qty=fill.qty)
             pos.protected = True
             self._persist()
         except Exception as e:
@@ -412,6 +573,8 @@ class Engine:
                   + f", borsada stop {stop:.6g} (acil stop %{self.s.emergency_stop_pct:g} = {emergency:.6g}"
                   + (f", {dm.sl_atr:g}×ATR = {sl:.6g}" if sl else "") + ", yakın olan)"
                   + (" + ÇIK sinyali" if dm.exit_rules else "") + f", en geç {dm.H} mum")
+        self._notify("trade_open", symbol=sig.symbol, direction=d, qty=fill.qty, price=fill.price, margin=pos.margin,
+                     stop=stop, tp=tp, H=dm.H, leverage=self.s.leverage)
 
     async def _exit(self, sym: str, fill: Fill, reason: str) -> None:
         pos = self.positions.pop(sym, None)
@@ -425,6 +588,10 @@ class Engine:
                               "pnl": pnl, "margin": pos.margin, "rule": pos.rule})
         self.emit("trade", f"{sym} kapandı ({reason}) @ {fill.price:g}, net {pnl:+.2f} USDT (komisyon {fees:.2f})")
         self._persist()
+        self._notify("trade_close", symbol=sym, direction=pos.direction, qty=pos.qty, entry=pos.entry_price,
+                     exit=fill.price, pnl=pnl, fees=fees, reason=reason, margin=pos.margin,
+                     pct=pnl / pos.margin * 100 if pos.margin else 0.0,
+                     minutes=max(0, (self._now() - pos.entry_time_ms) // 60000))
 
     def _persist(self) -> None:
         self.store.put(f"positions:{self.mode}", {k: asdict(v) for k, v in self.positions.items()})
@@ -435,10 +602,22 @@ class Engine:
         unreal = {s: p.direction * (self.last_prices.get(s, p.entry_price) - p.entry_price) * p.qty
                   for s, p in self.positions.items()}
         used = sum(p.margin for p in self.positions.values())
-        return {"running": self.running, "status": self.status_msg, "mode": self.mode,
+        st = self.state
+        status = {"running": "Çalışıyor", "starting": "Başlatılıyor", "stopped": "Durduruldu",
+                  "draining": f"Yeni işlem kapalı · {len(self.positions)} pozisyon yönetiliyor"}[st]
+        health = self.market.health() if hasattr(self.market, "health") else {}
+        return {"running": self.running, "state": st, "entries": self.entries, "status": status, "mode": self.mode,
                 "budget": self.s.budget_usdt, "effective_budget": self.risk.effective_budget(tot),
-                "margin_used": used, "realized": tot, "realized_today": today, "unrealized": sum(unreal.values()),
-                "positions": [{**asdict(p), "unrealized": unreal[s], "last_price": self.last_prices.get(s)}
+                "budget_set_at": self.s.budget_set_at, "margin_used": used, "realized": self.store.realized(self.mode),
+                "realized_period": tot, "realized_today": today, "unrealized": sum(unreal.values()),
+                "positions": [{**asdict(p), "unrealized": unreal[s], "last_price": self.last_prices.get(s),
+                               "roe_pct": unreal[s] / p.margin * 100 if p.margin else None,
+                               "move_pct": (p.direction * (self.last_prices[s] / p.entry_price - 1) * 100
+                                            if self.last_prices.get(s) else None)}
                               for s, p in self.positions.items()],
-                "last_bar": self.last_bar_ms, "symbols": len(self.symbols) or len(self.s.symbols),
+                "last_bar": self.last_bar_ms, "price_ts": self.price_ts, "now": self._now(),
+                "symbols": len(self.symbols) or len(self.s.symbols), "leverage": self.s.leverage,
+                "max_positions": self.s.max_positions, "emergency_stop_pct": self.s.emergency_stop_pct,
+                "external": sorted(getattr(self.broker, "external", ()) or ()),
+                "net": {**health, "down_since": self.net_fail_since},
                 "stats": self.store.stats(self.mode)}

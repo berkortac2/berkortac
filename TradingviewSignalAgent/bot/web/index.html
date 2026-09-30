@@ -3,23 +3,54 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
 <title>TSA Bot</title>
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="/static/app.css">
 <script src="/static/app.js" defer></script>
 </head>
 <body>
+<div class="bg" aria-hidden="true"><i class="orb o1"></i><i class="orb o2"></i><i class="orb o3"></i></div>
+
+<!-- icons -->
+<svg class="sprite" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+  <symbol id="i-panel" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9" rx="2"/><rect x="14" y="3" width="7" height="5" rx="2"/><rect x="14" y="12" width="7" height="9" rx="2"/><rect x="3" y="16" width="7" height="5" rx="2"/></symbol>
+  <symbol id="i-pos" viewBox="0 0 24 24"><path d="M4 19V9m6 10V5m6 14v-7m4 7H2"/></symbol>
+  <symbol id="i-hist" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 3"/></symbol>
+  <symbol id="i-sig" viewBox="0 0 24 24"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></symbol>
+  <symbol id="i-model" viewBox="0 0 24 24"><path d="M12 2 3 7v10l9 5 9-5V7z"/><path d="M3 7l9 5 9-5M12 12v10"/></symbol>
+  <symbol id="i-wallet" viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="14" rx="3"/><path d="M16 13h2M2 10h20M6 6V4h12v2"/></symbol>
+  <symbol id="i-tg" viewBox="0 0 24 24"><path d="M21 4 3 11l6 2 2 6 3-4 5 4z"/><path d="m9 13 8-6"/></symbol>
+  <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="m11 12 9-9m-3 3 3 3m-6 0 2 2"/></symbol>
+  <symbol id="i-app" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M8 21h8M12 18v3"/></symbol>
+  <symbol id="i-log" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4v16l13-8z"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3 2 20h20z"/><path d="M12 10v4m0 3h.01"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6z"/><path d="m9 12 2 2 4-4"/></symbol>
+  <symbol id="i-out" viewBox="0 0 24 24"><path d="M15 4h4v16h-4M10 8l-4 4 4 4M6 12h11"/></symbol>
+</svg>
+
 <div id="toasts" aria-live="polite"></div>
+<div id="modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+  <div class="modal-card glass">
+    <h3 id="modal-title"></h3>
+    <div id="modal-body" class="modal-body"></div>
+    <div id="modal-actions" class="modal-actions"></div>
+  </div>
+</div>
 
 <!-- ============ auth ============ -->
 <section id="auth" class="auth hidden">
-  <div class="auth-card">
+  <div class="auth-card glass">
     <div class="brand big"><span class="logo">◆</span> TSA Bot</div>
-    <p class="muted" id="auth-sub">Binance USDT-M Futures · 5 dk sinyal botu</p>
+    <p class="muted center" id="auth-sub">Binance USDT-M Futures · 5 dk sinyal botu</p>
     <form id="setup-form" class="hidden" autocomplete="off">
       <h2>İlk kurulum</h2>
-      <p class="muted small">Arayüz şifresi belirle. Bu şifre API anahtarlarını da şifreler; unutursan anahtarları yeniden girmen gerekir.</p>
-      <label>Kurulum anahtarı<input id="setup-token" required maxlength="128"></label>
+      <p class="muted small">Uygulama şifreni belirle. Bu şifre API anahtarlarını ve Telegram bilgisini de şifreler; unutursan bunları yeniden girmen gerekir.</p>
+      <label class="hidden-in-desktop">Kurulum anahtarı<input id="setup-token" required maxlength="128"></label>
       <label>Şifre (en az 10 karakter)<input id="setup-pw" type="password" minlength="10" required autocomplete="new-password"></label>
       <label>Şifre (tekrar)<input id="setup-pw2" type="password" minlength="10" required autocomplete="new-password"></label>
       <button class="btn primary wide" type="submit">Şifreyi kaydet</button>
@@ -27,6 +58,7 @@
     <form id="login-form" class="hidden">
       <h2>Giriş</h2>
       <label>Şifre<input id="login-pw" type="password" required autocomplete="current-password"></label>
+      <label class="check hidden" id="login-remember-row"><input type="checkbox" id="login-remember"> Bu bilgisayarda beni hatırla (Windows hesabına bağlı; bilgisayar açılınca bot kendiliğinden devam edebilir)</label>
       <button class="btn primary wide" type="submit">Giriş yap</button>
     </form>
   </div>
@@ -34,140 +66,263 @@
 
 <!-- ============ app ============ -->
 <div id="app" class="app hidden">
-  <aside class="side">
+  <aside class="side glass">
     <div class="brand"><span class="logo">◆</span> TSA Bot</div>
     <nav id="nav">
-      <a href="#/panel" data-view="panel"><span class="ico">▦</span>Panel</a>
-      <a href="#/positions" data-view="positions"><span class="ico">◧</span>Pozisyonlar</a>
-      <a href="#/trades" data-view="trades"><span class="ico">≣</span>İşlem geçmişi</a>
-      <a href="#/signals" data-view="signals"><span class="ico">⚡</span>Sinyaller</a>
-      <a href="#/model" data-view="model"><span class="ico">◈</span>Model</a>
-      <a href="#/settings" data-view="settings"><span class="ico">⚙</span>Ayarlar</a>
-      <a href="#/keys" data-view="keys"><span class="ico">🔑</span>API anahtarları</a>
-      <a href="#/log" data-view="log"><span class="ico">☰</span>Günlük</a>
+      <a href="#/panel" data-view="panel"><svg class="ico"><use href="#i-panel"/></svg><span>Panel</span></a>
+      <a href="#/positions" data-view="positions"><svg class="ico"><use href="#i-pos"/></svg><span>Pozisyonlar</span></a>
+      <a href="#/trades" data-view="trades"><svg class="ico"><use href="#i-hist"/></svg><span>İşlem geçmişi</span></a>
+      <a href="#/budget" data-view="budget"><svg class="ico"><use href="#i-wallet"/></svg><span>Bütçe &amp; risk</span></a>
+      <a href="#/signals" data-view="signals"><svg class="ico"><use href="#i-sig"/></svg><span>Sinyaller</span></a>
+      <a href="#/model" data-view="model"><svg class="ico"><use href="#i-model"/></svg><span>Model</span></a>
+      <a href="#/telegram" data-view="telegram"><svg class="ico"><use href="#i-tg"/></svg><span>Telegram</span></a>
+      <a href="#/keys" data-view="keys"><svg class="ico"><use href="#i-key"/></svg><span>API anahtarları</span></a>
+      <a href="#/settings" data-view="settings"><svg class="ico"><use href="#i-app"/></svg><span>Mod &amp; uygulama</span></a>
+      <a href="#/log" data-view="log"><svg class="ico"><use href="#i-log"/></svg><span>Günlük</span></a>
     </nav>
     <div class="side-foot">
-      <div class="safe"><span class="dot ok"></span>Çekim / transfer yetkisi yok</div>
-      <button id="logout" class="btn ghost small wide">Çıkış</button>
+      <div class="safe"><svg class="ico sm"><use href="#i-shield"/></svg>Para çekme / transfer yetkisi yok</div>
+      <button id="logout" class="btn ghost small wide"><svg class="ico sm"><use href="#i-out"/></svg>Çıkış</button>
     </div>
   </aside>
 
   <main>
-    <header class="top">
+    <header class="top glass">
       <div class="top-left">
         <span id="mode-badge" class="badge">PAPER</span>
         <span id="run-pill" class="pill"><span class="dot"></span><span id="run-text">Durduruldu</span></span>
-        <span id="last-bar" class="muted small"></span>
+        <span id="net-pill" class="pill subtle" title="Binance bağlantısı ve istek limiti kullanımı"><span class="dot"></span><span id="net-text">Bağlantı –</span></span>
+        <span id="tg-pill" class="pill subtle hidden" title="Telegram"><svg class="ico sm"><use href="#i-tg"/></svg><span id="tg-text">Telegram</span></span>
       </div>
       <div class="top-right">
-        <input id="live-pw" type="password" class="hidden top-pw" placeholder="Şifre (canlı başlatma)" autocomplete="current-password">
-        <button id="btn-start" class="btn primary">▶ Başlat</button>
-        <button id="btn-stop" class="btn">■ Durdur</button>
-        <button id="btn-panic" class="btn danger" title="Tüm bot pozisyonlarını piyasa fiyatından kapatır ve durdurur">⚠ Acil kapat</button>
+        <button id="btn-start" class="btn primary"><svg class="ico sm"><use href="#i-play"/></svg><span id="btn-start-text">Başlat</span></button>
+        <button id="btn-stop" class="btn"><svg class="ico sm"><use href="#i-stop"/></svg>Durdur</button>
+        <button id="btn-panic" class="btn danger" title="Botun açtığı tüm pozisyonları piyasa fiyatından kapatır ve botu durdurur"><svg class="ico sm"><use href="#i-alert"/></svg>Acil kapat</button>
       </div>
     </header>
 
-    <!-- panel -->
+    <!-- ================= panel ================= -->
     <section class="view" id="view-panel">
       <div class="kpis">
-        <div class="kpi"><div class="k-label">Net kâr (gerçekleşen)</div><div class="k-val" id="k-real">–</div><div class="k-sub" id="k-real-sub"></div></div>
-        <div class="kpi"><div class="k-label">Bugün (UTC)</div><div class="k-val" id="k-today">–</div><div class="k-sub">komisyon düşülmüş</div></div>
-        <div class="kpi"><div class="k-label">Açık pozisyon K/Z</div><div class="k-val" id="k-unreal">–</div><div class="k-sub" id="k-open"></div></div>
-        <div class="kpi"><div class="k-label">Bütçe kullanımı</div><div class="k-val" id="k-budget">–</div>
+        <div class="kpi glass accent">
+          <div class="k-label">Bot sermayesi</div>
+          <div class="k-val" id="k-capital">–</div>
+          <div class="k-sub"><span id="k-capital-chg" class="chg">–</span> <span class="muted" id="k-capital-base"></span></div>
+        </div>
+        <div class="kpi glass"><div class="k-label">Bugün (net)</div><div class="k-val" id="k-today">–</div><div class="k-sub" id="k-today-sub">komisyon düşülmüş</div></div>
+        <div class="kpi glass"><div class="k-label">Açık pozisyon K/Z</div><div class="k-val" id="k-unreal">–</div><div class="k-sub" id="k-open"></div></div>
+        <div class="kpi glass"><div class="k-label">Toplam net K/Z</div><div class="k-val" id="k-real">–</div><div class="k-sub" id="k-fees"></div></div>
+        <div class="kpi glass"><div class="k-label">Bütçe kullanımı</div><div class="k-val" id="k-budget">–</div>
           <div class="bar"><div id="k-budget-bar"></div></div><div class="k-sub" id="k-budget-sub"></div></div>
-        <div class="kpi"><div class="k-label">İşlem / kazanma</div><div class="k-val" id="k-trades">–</div><div class="k-sub" id="k-fees"></div></div>
       </div>
+
       <div class="grid2">
-        <div class="card">
-          <div class="card-h"><h3>Sermaye eğrisi</h3><span class="muted small" id="eq-range"></span></div>
-          <canvas id="eq-chart" height="240"></canvas>
+        <div class="card glass">
+          <div class="card-h">
+            <div><h3>Bütçe değişimi</h3><div class="sub"><span id="eq-change" class="chg"></span> <span class="muted small" id="eq-range"></span></div></div>
+            <div class="tools">
+              <div class="seg" id="eq-mode"><button data-v="capital" class="on">Sermaye</button><button data-v="pnl">K/Z</button></div>
+              <div class="seg" id="eq-tabs"><button data-v="today">Bugün</button><button data-v="7d" class="on">7 gün</button><button data-v="30d">30 gün</button><button data-v="all">Tümü</button></div>
+            </div>
+          </div>
+          <div class="chart-wrap"><canvas id="eq-chart" height="260"></canvas><div id="eq-tip" class="tip hidden"></div></div>
         </div>
-        <div class="card">
-          <div class="card-h"><h3>Son olaylar</h3></div>
-          <ul class="feed" id="feed-mini"></ul>
+        <div class="card glass">
+          <div class="card-h"><h3>Günlük kâr / zarar</h3><span class="muted small">son 30 gün</span></div>
+          <div class="chart-wrap"><canvas id="day-chart" height="170"></canvas><div id="day-tip" class="tip hidden"></div></div>
+          <div class="chips" id="sum-chips"></div>
         </div>
       </div>
-      <div class="card">
-        <div class="card-h"><h3>Açık pozisyonlar</h3></div>
-        <div class="tbl-wrap"><table id="pos-mini"></table></div>
+
+      <div class="card glass">
+        <div class="card-h"><h3>Açık pozisyonlar</h3>
+          <div class="tools"><span class="muted small" id="pos-note"></span><button class="btn small danger-ghost js-close-all"><svg class="ico sm"><use href="#i-x"/></svg>Tümünü kapat</button></div></div>
+        <div class="tbl-wrap"><table id="pos-mini" class="tbl"></table></div>
+      </div>
+      <div class="card glass">
+        <div class="card-h"><h3>Son olaylar</h3><a href="#/log" class="link small">tümü →</a></div>
+        <ul class="feed" id="feed-mini"></ul>
       </div>
     </section>
 
+    <!-- ================= positions ================= -->
     <section class="view hidden" id="view-positions">
-      <div class="card"><div class="card-h"><h3>Açık pozisyonlar</h3></div><div class="tbl-wrap"><table id="pos-table"></table></div></div>
-    </section>
-
-    <section class="view hidden" id="view-trades">
-      <div class="card"><div class="card-h"><h3>İşlem geçmişi</h3><span class="muted small">net = fiyat farkı − komisyon</span></div>
-        <div class="tbl-wrap"><table id="trades-table"></table></div></div>
-    </section>
-
-    <section class="view hidden" id="view-signals">
-      <div class="card"><div class="card-h"><h3>Son mum sinyalleri</h3><span class="muted small">her 5 dk kapanışında güncellenir</span></div>
-        <div class="tbl-wrap"><table id="sig-table"></table></div></div>
-    </section>
-
-    <section class="view hidden" id="view-model">
-      <div class="grid2">
-        <div class="card"><div class="card-h"><h3>AL (long) kuralları</h3></div><div id="model-long"></div></div>
-        <div class="card"><div class="card-h"><h3>SAT (short) kuralları</h3></div><div id="model-short"></div></div>
+      <div class="card glass">
+        <div class="card-h"><h3>Botun pozisyonları</h3>
+          <div class="tools"><button class="btn small danger-ghost js-close-all"><svg class="ico sm"><use href="#i-x"/></svg>Tümünü kapat</button></div></div>
+        <div class="tbl-wrap"><table id="pos-table" class="tbl"></table></div>
       </div>
-      <div class="card"><div class="card-h"><h3>Kilitli test sonuçları</h3><span class="muted small">araştırmanın hiç görmediği dönem</span></div>
-        <div class="tbl-wrap"><table id="model-stats"></table></div></div>
+      <div class="card glass">
+        <div class="card-h"><h3>Senin pozisyonların <span class="muted small">— bot bunlara dokunmaz</span></h3>
+          <button class="btn small ghost" id="btn-wallet-refresh-2"><svg class="ico sm"><use href="#i-refresh"/></svg>Yenile</button></div>
+        <p class="muted small" id="ext-note">Binance'te elle açtığın pozisyonlar burada görünür. Bot bu coinlerde yeni işlem açmaz, bu pozisyonları kapatmaz ve emirlerine dokunmaz.</p>
+        <div class="tbl-wrap"><table id="ext-table" class="tbl"></table></div>
+      </div>
     </section>
 
-    <section class="view hidden" id="view-settings">
-      <form id="settings-form" class="card form">
-        <div class="card-h"><h3>Bot ayarları</h3><span class="muted small">bot dururken değiştirilebilir</span></div>
-        <div class="form-grid">
-          <label>Mod
-            <select id="s-mode">
-              <option value="paper">Paper — sanal para, canlı piyasa verisi</option>
-              <option value="testnet">Testnet — Binance demo hesabı</option>
-              <option value="live">Canlı — gerçek para</option>
-              <option value="replay">Replay — geçmiş veriyle hızlı demo</option>
-            </select></label>
-          <label>Bütçe (USDT) <span class="hint">botun kullanabileceği en fazla marjin</span><input id="s-budget" type="number" min="5" step="1"></label>
-          <label>Eş zamanlı pozisyon <span class="hint">pozisyon başı marjin = bütçe / bu sayı</span><input id="s-maxpos" type="number" min="1" max="20" step="1"></label>
-          <label>Kaldıraç (izole) <input id="s-lev" type="number" min="1" max="10" step="1"></label>
-          <label>Günlük zarar limiti (% bütçe)<input id="s-daily" type="number" min="0.5" max="100" step="0.5"></label>
-          <label>Maks. toplam zarar (% bütçe) <span class="hint">aşılırsa bot kendini durdurur</span><input id="s-maxdd" type="number" min="1" max="100" step="1"></label>
-          <label>Acil stop (%) <span class="hint">her işlemde otomatik olarak Binance'e zarar-kes emri konur (3×ATR stop daha yakınsa o); bot kapalıyken de çalışır, kapatılamaz</span><input id="s-emerg" type="number" min="1" max="50" step="0.5"></label>
-          <label>Replay hızı (sn/mum)<input id="s-speed" type="number" min="0" max="10" step="0.01"></label>
-        </div>
-        <div class="checks">
-          <label class="check"><input type="checkbox" id="s-long"> AL (long) işlemleri</label>
-          <label class="check"><input type="checkbox" id="s-short"> SAT (short) işlemleri</label>
-          <label class="check"><input type="checkbox" id="s-compound"> Kârı bütçeye ekle (bileşik)</label>
-        </div>
-        <label>İzlenen USDT pariteleri <span class="hint">virgülle ayır; sadece XXXUSDT perpetual</span>
-          <textarea id="s-symbols" rows="3" spellcheck="false"></textarea></label>
-        <div class="live-box" id="live-box">
-          <label class="check"><input type="checkbox" id="s-live"> Gerçek parayla işlem yapılacağını, kaldıraçlı işlemlerin riskini ve geçmiş performansın geleceği garanti etmediğini anlıyor ve onaylıyorum.</label>
-        </div>
-        <div class="row-end">
-          <button type="button" id="btn-reset" class="btn ghost">Paper/replay geçmişini sıfırla</button>
-          <button class="btn primary" type="submit">Kaydet</button>
-        </div>
-      </form>
+    <!-- ================= trades ================= -->
+    <section class="view hidden" id="view-trades">
+      <div class="card glass">
+        <div class="card-h"><h3>İşlem geçmişi</h3>
+          <div class="seg" id="tr-tabs"><button data-v="today">Bugün</button><button data-v="7d">7 gün</button><button data-v="30d" class="on">30 gün</button><button data-v="all">Tümü</button></div></div>
+        <div class="stats" id="tr-stats"></div>
+        <div class="tbl-wrap"><table id="trades-table" class="tbl"></table></div>
+        <p class="muted small">Net = fiyat farkı − komisyon (Binance taker %0,05 × 2). Yüzde, pozisyonun marjinine göredir.</p>
+      </div>
     </section>
 
+    <!-- ================= budget & risk ================= -->
+    <section class="view hidden" id="view-budget">
+      <div class="grid2 even">
+        <form id="risk-form" class="card glass form" autocomplete="off">
+          <div class="card-h"><h3>Bütçe ve risk</h3><span class="muted small">bot çalışırken de değiştirilebilir</span></div>
+
+          <div class="field">
+            <div class="field-h"><span>Bota ayrılan bütçe</span><span class="val" id="b-val">–</span></div>
+            <div class="money-in"><input id="s-budget" type="number" min="5" step="1" inputmode="decimal"><span>USDT</span></div>
+            <input id="s-budget-range" type="range" min="5" max="1000" step="1" aria-label="Bütçe kaydırıcı">
+            <div class="chips" id="b-pcts"><button type="button" data-p="10">%10</button><button type="button" data-p="25">%25</button><button type="button" data-p="50">%50</button><button type="button" data-p="75">%75</button><button type="button" data-p="100">%100</button></div>
+            <div class="hint" id="b-hint">Yüzdeler futures USDT bakiyene göredir.</div>
+            <div class="warn hidden" id="b-warn"></div>
+          </div>
+
+          <div class="field">
+            <div class="field-h"><span>Kaldıraç (izole)</span><span class="val" id="lev-val">1x</span></div>
+            <input id="s-lev-range" type="range" min="1" max="10" step="1" aria-label="Kaldıraç">
+            <div class="row gap"><input id="s-lev" type="number" min="1" max="10" step="1" class="w90"><span class="risk" id="lev-risk"></span></div>
+          </div>
+
+          <div class="field">
+            <div class="field-h"><span>Zarar-kes / acil stop</span><span class="val" id="stop-val">%8</span></div>
+            <input id="s-emerg-range" type="range" min="1" max="50" step="0.5" aria-label="Stop yüzdesi">
+            <div class="row gap"><input id="s-emerg" type="number" min="1" max="50" step="0.5" class="w90"><span class="hint">Her işlemde Binance'e otomatik zarar-kes emri konur (modelin 3×ATR stop'u daha yakınsa o kullanılır). Bot kapalıyken de çalışır.</span></div>
+          </div>
+
+          <div class="field">
+            <div class="field-h"><span>Eş zamanlı pozisyon</span><span class="val" id="maxpos-val">8</span></div>
+            <input id="s-maxpos-range" type="range" min="1" max="20" step="1" aria-label="Eş zamanlı pozisyon">
+            <input id="s-maxpos" type="number" min="1" max="20" step="1" class="w90">
+          </div>
+
+          <div class="preview glass-inner" id="size-preview"></div>
+
+          <div class="form-grid">
+            <label>Günlük zarar limiti (% bütçe)<input id="s-daily" type="number" min="0.5" max="100" step="0.5"></label>
+            <label>Maks. toplam zarar (% bütçe) <span class="hint">aşılırsa bot durur</span><input id="s-maxdd" type="number" min="1" max="100" step="1"></label>
+          </div>
+          <div class="checks">
+            <label class="switch"><input type="checkbox" id="s-long"><i></i>AL (long)</label>
+            <label class="switch"><input type="checkbox" id="s-short"><i></i>SAT (short)</label>
+            <label class="switch"><input type="checkbox" id="s-compound"><i></i>Kârı bütçeye ekle</label>
+          </div>
+          <div class="row-end">
+            <span class="muted small" id="risk-note">Kaldıraç ve stop yeni açılan pozisyonlarda geçerli olur; açık pozisyonlar kendi stopunu korur.</span>
+            <button class="btn primary" type="submit" id="btn-risk-save">Kaydet</button>
+          </div>
+        </form>
+
+        <div class="card glass">
+          <div class="card-h"><h3>Futures cüzdanı</h3><button type="button" class="btn small ghost" id="btn-wallet-refresh"><svg class="ico sm"><use href="#i-refresh"/></svg>Yenile</button></div>
+          <div class="wallet" id="wallet-box"></div>
+          <div class="note">
+            <b>Bütçe nasıl işler?</b>
+            <ul>
+              <li>Bot, aynı anda açık tüm pozisyonlarının marjini toplamı olarak <b>en fazla bu bütçeyi</b> kullanır. Her pozisyona bütçe / eş zamanlı pozisyon kadar marjin ayrılır.</li>
+              <li>Bütçeyi değiştirdiğin an yeni bir <b>bütçe dönemi</b> başlar: bot o anda tam bu bütçeye sahip olur. Zarar ederse bütçe küçülür; kâr bütçeye eklenmez (kutucuk işaretli değilse). Böylece belirlediğin tutar hiçbir zaman aşılmaz.</li>
+              <li>Binance'te elle açtığın pozisyonlara ve emirlerine bot <b>dokunmaz</b>; o coinlerde işlem açmaz. Kullanılabilir bakiye yetmezse o sinyali atlar.</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= signals ================= -->
+    <section class="view hidden" id="view-signals">
+      <div class="card glass"><div class="card-h"><h3>Son mum sinyalleri</h3><span class="muted small">her 5 dk kapanışında güncellenir</span></div>
+        <div class="tbl-wrap"><table id="sig-table" class="tbl"></table></div></div>
+    </section>
+
+    <!-- ================= model ================= -->
+    <section class="view hidden" id="view-model">
+      <div class="grid2 even">
+        <div class="card glass"><div class="card-h"><h3>AL (long) kuralları</h3></div><div id="model-long"></div></div>
+        <div class="card glass"><div class="card-h"><h3>SAT (short) kuralları</h3></div><div id="model-short"></div></div>
+      </div>
+      <div class="card glass"><div class="card-h"><h3>Kilitli test sonuçları</h3><span class="muted small">araştırmanın hiç görmediği dönem</span></div>
+        <div class="tbl-wrap"><table id="model-stats" class="tbl"></table></div></div>
+    </section>
+
+    <!-- ================= telegram ================= -->
+    <section class="view hidden" id="view-telegram">
+      <div class="grid2 even">
+        <div class="card glass">
+          <div class="card-h"><h3>Telegram bağlantısı</h3><span id="tg-state" class="badge">kapalı</span></div>
+          <ol class="steps">
+            <li><b>Bot oluştur:</b> Telegram'da <a href="https://t.me/BotFather" target="_blank" rel="noopener noreferrer" class="link">@BotFather</a>'a <code>/newbot</code> yaz, bir isim ver. Sana <code>123456789:AA…</code> gibi bir <b>token</b> verecek.</li>
+            <li><b>Token'ı buraya yapıştır ve kaydet.</b> Token şifreli kasada saklanır, geri gösterilmez.</li>
+            <li><b>Eşleştir:</b> düğmeye bas, çıkan 6 haneli kodu Telegram'da botuna gönder. Bot bundan sonra yalnızca senin sohbetine cevap verir.</li>
+          </ol>
+          <form id="tg-token-form" class="form" autocomplete="off">
+            <label>Bot token<input id="tg-token" type="password" maxlength="100" autocomplete="off" spellcheck="false" placeholder="123456789:AA…"></label>
+            <div class="row-end">
+              <button type="button" class="btn ghost" id="btn-tg-delete">Token'ı sil</button>
+              <button type="submit" class="btn primary" id="btn-tg-save">Kaydet ve bağlan</button>
+            </div>
+          </form>
+          <div class="pair glass-inner" id="tg-pair-box">
+            <div class="row between"><div><b>Eşleşme</b><div class="muted small" id="tg-paired-text">Eşleşmedi</div></div>
+              <div class="row gap"><button type="button" class="btn" id="btn-tg-pair">Eşleştir</button>
+                <button type="button" class="btn ghost hidden" id="btn-tg-unpair">Eşleşmeyi kaldır</button></div></div>
+            <div class="pair-code hidden" id="tg-code-box">
+              <div class="muted small">Telegram'da botuna şu mesajı gönder:</div>
+              <div class="code" id="tg-code">/eslestir 000000</div>
+              <div class="row gap"><a class="btn small hidden" id="tg-open" target="_blank" rel="noopener noreferrer" href="https://t.me/">Telegram'da aç</a><span class="muted small" id="tg-countdown"></span></div>
+            </div>
+            <div class="row gap"><button type="button" class="btn small" id="btn-tg-test" disabled>Test mesajı gönder</button></div>
+          </div>
+        </div>
+        <div class="card glass">
+          <div class="card-h"><h3>Bildirimler ve komutlar</h3></div>
+          <form id="tg-prefs-form" class="form">
+            <div class="checks col">
+              <label class="switch"><input type="checkbox" id="tg-n-trades"><i></i>Pozisyon açılınca / kapanınca mesaj at</label>
+              <label class="switch"><input type="checkbox" id="tg-n-errors"><i></i>Hata, bağlantı kesintisi ve bot durunca mesaj at</label>
+              <div class="row gap"><label class="switch"><input type="checkbox" id="tg-daily"><i></i>Her gün özet gönder</label>
+                <select id="tg-hour" class="inline" aria-label="Özet saati"></select></div>
+              <label class="switch"><input type="checkbox" id="tg-control"><i></i>Telefondan başlat / durdur / kapat komutlarına izin ver</label>
+            </div>
+          </form>
+          <div class="note">
+            <b>Komutlar</b> (Türkçe karakterle de yazılabilir: /başlat, /geçmiş)
+            <ul class="cmds">
+              <li><code>/rapor</code> açık pozisyonlar, anlık K/Z, bugünkü kasa durumu</li>
+              <li><code>/gecmis</code> bugünkü işlem geçmişi · <code>/gecmis 7</code> son 7 gün</li>
+              <li><code>/pozisyonlar</code> sadece açık pozisyonlar</li>
+              <li><code>/baslat</code> botu başlat · <code>/durdur</code> yeni işlem açmayı durdur</li>
+              <li><code>/kapat SOLUSDT</code> · <code>/hepsinikapat</code> (ikisi de <code>/onay</code> ister)</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= keys ================= -->
     <section class="view hidden" id="view-keys">
-      <div class="grid2">
-        <form id="keys-form" class="card form" autocomplete="off">
+      <div class="grid2 even">
+        <form id="keys-form" class="card glass form" autocomplete="off">
           <div class="card-h"><h3>Binance API anahtarı</h3><span id="keys-state" class="badge">yok</span></div>
-          <p class="muted small">Anahtar yalnızca bu bilgisayarda, arayüz şifrenle şifrelenmiş olarak saklanır. Geri gösterilmez, loglanmaz, hiçbir yere gönderilmez (yalnızca Binance'e imzalı istek için kullanılır).</p>
+          <p class="muted small">Anahtar yalnızca bu bilgisayarda, uygulama şifrenle şifrelenmiş olarak saklanır. Geri gösterilmez, loglanmaz, hiçbir yere gönderilmez (yalnızca Binance'e imzalı istek için kullanılır).</p>
           <label>API Key<input id="k-key" autocomplete="off" spellcheck="false" maxlength="128"></label>
           <label>Secret Key<input id="k-secret" type="password" autocomplete="new-password" maxlength="128"></label>
-          <label>Arayüz şifren (onay)<input id="k-pw" type="password" autocomplete="current-password"></label>
+          <label>Uygulama şifren (onay)<input id="k-pw" type="password" autocomplete="current-password"></label>
           <div class="row-end">
             <button type="button" id="btn-keys-del" class="btn ghost">Anahtarı sil</button>
             <button class="btn primary" type="submit">Şifreleyip kaydet</button>
           </div>
         </form>
-        <div class="card">
+        <div class="card glass">
           <div class="card-h"><h3>İzin kontrolü</h3></div>
-          <div class="row-end left">
+          <div class="row gap">
             <button id="btn-check-test" class="btn">Testnet'i kontrol et</button>
             <button id="btn-check-live" class="btn">Canlı hesabı kontrol et</button>
           </div>
@@ -176,17 +331,62 @@
             <b>Binance'te anahtar oluştururken:</b>
             <ol>
               <li>Sadece <b>Enable Reading</b> ve <b>Enable Futures</b> açık olsun.</li>
-              <li><b>Enable Withdrawals</b>, <b>Universal Transfer</b>, <b>Internal Transfer</b> kapalı olsun — açıksa bot canlı modda çalışmayı reddeder.</li>
-              <li>Mümkünse <b>IP kısıtlaması</b> ekle (bilgisayarının IP'si).</li>
-              <li>Futures hesabında <b>One-way Mode</b> seçili olsun.</li>
+              <li><b>Enable Withdrawals</b>, <b>Universal Transfer</b>, <b>Internal Transfer</b> kapalı olsun. Açıksa bot canlı modda çalışmayı reddeder.</li>
+              <li>Mümkünse <b>IP kısıtlaması</b> ekle (bu bilgisayarın IP'si).</li>
+              <li>Futures hesabında <b>One-way Mode</b> ve <b>Single-Asset</b> seçili olsun.</li>
             </ol>
           </div>
         </div>
       </div>
     </section>
 
+    <!-- ================= mode & app ================= -->
+    <section class="view hidden" id="view-settings">
+      <div class="grid2 even">
+        <form id="mode-form" class="card glass form" autocomplete="off">
+          <div class="card-h"><h3>Mod ve pariteler</h3><span class="muted small">bot dururken değiştirilebilir</span></div>
+          <label>Mod
+            <select id="s-mode">
+              <option value="paper">Paper: sanal para, canlı piyasa verisi</option>
+              <option value="testnet">Testnet: Binance demo hesabı</option>
+              <option value="live">Canlı: gerçek para</option>
+              <option value="replay">Replay: geçmiş veriyle hızlı demo</option>
+            </select></label>
+          <div class="form-grid">
+            <label>Sanal bakiye (paper, USDT)<input id="s-paperwallet" type="number" min="10" step="10"></label>
+            <label id="speed-row">Replay hızı (sn/mum)<input id="s-speed" type="number" min="0" max="10" step="0.01"></label>
+          </div>
+          <label>İzlenen USDT pariteleri <span class="hint">virgülle ayır; sadece XXXUSDT perpetual</span>
+            <textarea id="s-symbols" rows="4" spellcheck="false"></textarea></label>
+          <div class="live-box" id="live-box">
+            <label class="check"><input type="checkbox" id="s-live"> Gerçek parayla işlem yapılacağını, kaldıraçlı işlemlerin riskini ve geçmiş performansın geleceği garanti etmediğini anlıyor ve onaylıyorum.</label>
+          </div>
+          <div class="row-end">
+            <button type="button" id="btn-reset" class="btn ghost">Paper/replay geçmişini sıfırla</button>
+            <button class="btn primary" type="submit">Kaydet</button>
+          </div>
+        </form>
+        <div class="card glass">
+          <div class="card-h"><h3>Uygulama</h3><span class="badge" id="app-kind">tarayıcı</span></div>
+          <div class="checks col" id="app-prefs">
+            <label class="switch"><input type="checkbox" id="p-autostart"><i></i>Windows açılınca TSA Bot'u başlat (sistem tepsisinde)</label>
+            <label class="switch"><input type="checkbox" id="p-resume"><i></i>Uygulama açılınca, kapanırken çalışıyorsa botu devam ettir</label>
+            <label class="switch"><input type="checkbox" id="p-notify"><i></i>İşlem bildirimlerini masaüstünde göster</label>
+            <label class="switch"><input type="checkbox" id="p-awake"><i></i>Bot çalışırken bilgisayarın uykuya geçmesini engelle</label>
+            <label class="switch"><input type="checkbox" id="p-remember"><i></i>Bu bilgisayarda beni hatırla (şifresiz açılış, Windows hesabına bağlı)</label>
+          </div>
+          <div class="note small">
+            <b>Pencereyi kapatınca (X)</b> uygulama kapanmaz: saatin yanındaki gizli simgeler (^) alanına küçülür, bot çalışmaya devam eder.
+            Tamamen kapatmak için oradaki TSA Bot simgesine <b>sağ tıkla → Tamamen kapat</b>.
+          </div>
+          <div class="kv" id="app-info"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= log ================= -->
     <section class="view hidden" id="view-log">
-      <div class="card"><div class="card-h"><h3>Günlük</h3></div><ul class="feed" id="feed-full"></ul></div>
+      <div class="card glass"><div class="card-h"><h3>Günlük</h3></div><ul class="feed tall" id="feed-full"></ul></div>
     </section>
   </main>
 </div>

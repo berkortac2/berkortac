@@ -48,7 +48,7 @@ def test_allowlist_has_no_wallet_endpoints():
 
 
 def test_source_has_no_wallet_calls():
-    src = "".join(p.read_text() for p in (tsabot.BOT_ROOT / "tsabot").rglob("*.py"))
+    src = "".join(p.read_text(encoding="utf-8") for p in (tsabot.BOT_ROOT / "tsabot").rglob("*.py"))
     for bad in ("/withdraw", "capital/", "asset/transfer", "futures/transfer", "universalTransfer"):
         assert bad not in src
     assert "follow_redirects=False" in src
@@ -94,7 +94,8 @@ def test_vault_roundtrip_and_encryption(tmp_path):
     v.save(PW, KEY, SECRET)
     raw = (tmp_path / "vault.json").read_text()
     assert KEY not in raw and SECRET not in raw
-    assert stat.S_IMODE(os.stat(tmp_path / "vault.json").st_mode) == 0o600
+    if os.name != "nt":                      # Windows: the file lives in the user's own profile folder
+        assert stat.S_IMODE(os.stat(tmp_path / "vault.json").st_mode) == 0o600
     k, s = v.load(PW)
     assert k.reveal() == KEY and s.reveal() == SECRET
     assert v.load("wrong password!!") is None

@@ -26,7 +26,13 @@ class Store:
             CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY, ts INTEGER, level TEXT, msg TEXT);
             CREATE TABLE IF NOT EXISTS equity(ts INTEGER, mode TEXT, equity REAL, realized REAL);
             CREATE TABLE IF NOT EXISTS kv(k TEXT PRIMARY KEY, v TEXT);
+            CREATE INDEX IF NOT EXISTS trades_exit ON trades(mode, exit_time);
+            CREATE INDEX IF NOT EXISTS equity_ts ON equity(mode, ts);
             """)
+            cols = {r[1] for r in self.db.execute("PRAGMA table_info(equity)")}
+            for c in ("budget", "pnl"):                      # added in 1.1 (budget chart)
+                if c not in cols:
+                    self.db.execute(f"ALTER TABLE equity ADD COLUMN {c} REAL")
             self.db.commit()
 
     def _x(self, sql, args=()):
@@ -42,10 +48,25 @@ class Store:
         self._x("INSERT INTO trades(mode, symbol, direction, qty, entry_time, entry_price, exit_time, exit_price, "
                 "reason, fees, pnl, margin, rule) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", [t[c] for c in self.TRADE_COLS])
 
-    def trades(self, mode: str, limit: int = 200) -> list[dict]:
-        cur = self._x("SELECT * FROM trades WHERE mode=? ORDER BY exit_time DESC LIMIT ?", (mode, limit))
+    def trades(self, mode: str, limit: int = 200, since_ms: int = 0, until_ms: int | None = None) -> list[dict]:
+        cur = self._x("SELECT * FROM trades WHERE mode=? AND exit_time>=? AND exit_time<? ORDER BY exit_time DESC "
+                      "LIMIT ?", (mode, since_ms, until_ms if until_ms is not None else 2 ** 62, limit))
         names = [d[0] for d in cur.description]
         return [dict(zip(names, r)) for r in cur.fetchall()]
+
+    def summary(self, mode: str, since_ms: int = 0, until_ms: int | None = None) -> dict:
+        r = self._x("SELECT COUNT(*), COALESCE(SUM(pnl>0),0), COALESCE(SUM(pnl),0), COALESCE(SUM(fees),0), "
+                    "COALESCE(MAX(pnl),0), COALESCE(MIN(pnl),0) FROM trades WHERE mode=? AND exit_time>=? AND "
+                    "exit_time<?", (mode, since_ms, until_ms if until_ms is not None else 2 ** 62)).fetchone()
+        n = int(r[0])
+        return {"trades": n, "wins": int(r[1]), "win_rate": (r[1] / n) if n else None, "net_pnl": float(r[2]),
+                "fees": float(r[3]), "best": float(r[4]), "worst": float(r[5])}
+
+    def daily_pnl(self, mode: str, since_ms: int, tz_offset_ms: int) -> list[dict]:
+        """Net PnL per local calendar day (tz_offset_ms = local time - UTC)."""
+        cur = self._x("SELECT (exit_time + ?) / 86400000 AS d, SUM(pnl), COUNT(*) FROM trades WHERE mode=? AND "
+                      "exit_time>=? GROUP BY d ORDER BY d", (tz_offset_ms, mode, since_ms))
+        return [{"day": int(d) * 86_400_000 - tz_offset_ms, "pnl": float(v), "trades": int(n)} for d, v, n in cur]
 
     def realized(self, mode: str, since_ms: int = 0) -> float:
         r = self._x("SELECT COALESCE(SUM(pnl),0) FROM trades WHERE mode=? AND exit_time>=?", (mode, since_ms))
@@ -65,13 +86,25 @@ class Store:
         cur = self._x("SELECT ts, level, msg FROM events ORDER BY id DESC LIMIT ?", (limit,))
         return [{"ts": a, "level": b, "msg": c} for a, b, c in cur.fetchall()]
 
-    def add_equity(self, ts: int, mode: str, equity: float, realized: float) -> None:
-        self._x("INSERT INTO equity(ts, mode, equity, realized) VALUES(?,?,?,?)", (ts, mode, equity, realized))
+    def add_equity(self, ts: int, mode: str, equity: float, realized: float, budget: float | None = None,
+                   pnl: float | None = None) -> None:
+        self._x("INSERT INTO equity(ts, mode, equity, realized, budget, pnl) VALUES(?,?,?,?,?,?)",
+                (ts, mode, equity, realized, budget, pnl))
 
-    def equity(self, mode: str, limit: int = 2000) -> list[dict]:
-        cur = self._x("SELECT ts, equity, realized FROM (SELECT * FROM equity WHERE mode=? ORDER BY ts DESC LIMIT ?) "
-                      "ORDER BY ts", (mode, limit))
-        return [{"ts": a, "equity": b, "realized": c} for a, b, c in cur.fetchall()]
+    def equity(self, mode: str, limit: int = 2000, since_ms: int = 0, points: int | None = None) -> list[dict]:
+        """Equity curve (oldest first). With `points` the curve is thinned to at most that many points
+        (the last point of each time bucket is kept, so the latest value is always exact)."""
+        cur = self._x("SELECT ts, equity, realized, budget, pnl FROM (SELECT * FROM equity WHERE mode=? AND ts>=? "
+                      "ORDER BY ts DESC LIMIT ?) ORDER BY ts", (mode, since_ms, limit))
+        rows = [{"ts": a, "equity": b, "realized": c, "budget": d, "pnl": e} for a, b, c, d, e in cur.fetchall()]
+        if points and len(rows) > points:
+            t0, t1 = rows[0]["ts"], rows[-1]["ts"]
+            step = (t1 - t0) / points or 1
+            keep = {}
+            for r in rows:
+                keep[int((r["ts"] - t0) // step)] = r
+            rows = [rows[0]] + [v for k, v in sorted(keep.items()) if v is not rows[0]]
+        return rows
 
     def put(self, k: str, v) -> None:
         self._x("INSERT OR REPLACE INTO kv(k, v) VALUES(?,?)", (k, json.dumps(v)))

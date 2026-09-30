@@ -1,2 +1,6 @@
 data/
 tests/screenshots/
+build/
+dist/
+.venv/
+packaging/tsabot.ico
