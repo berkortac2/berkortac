@@ -7,7 +7,9 @@ Pine Script v6 göstergesi ve onu bulan Python araştırma motoru.
 - Sonuçlar ve yüzdeler: [`reports/SONUCLAR.md`](reports/SONUCLAR.md)
 - **5 dk derin araştırma (2. tur), 36 coinlik 5 dk tarayıcı ve bot sonuçları:** [`reports/SONUCLAR_5DK_BOT.md`](reports/SONUCLAR_5DK_BOT.md)
 - **5 dk çoklu coin tarayıcı (Pine):** [`pine/TradingviewSignalAgent_Scanner5m.pine`](pine/TradingviewSignalAgent_Scanner5m.pine)
-- **Binance USDT-M futures botu (arayüzlü):** [`bot/README.md`](bot/README.md)
+- **Binance USDT-M futures botu:** Windows masaüstü uygulaması (sistem tepsisinde çalışır), Telegram'dan rapor
+  ve kontrol, bütçe kaydırıcısı, elle pozisyon kapatma: [`bot/README.md`](bot/README.md). Hazır `TSABot.exe`:
+  GitHub → Actions → **TSA Bot Windows** → son çalıştırma → Artifacts → **TSABot-windows**.
 - İnternet araştırması özeti ve kaynaklar: [`research/ARASTIRMA.md`](research/ARASTIRMA.md)
 - TradingView kodu: [`pine/TradingviewSignalAgent.pine`](pine/TradingviewSignalAgent.pine) (gösterge) ve
   [`pine/TradingviewSignalAgent_Strategy.pine`](pine/TradingviewSignalAgent_Strategy.pine) (Strategy Tester sürümü)

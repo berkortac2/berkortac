@@ -340,7 +340,8 @@ class DesktopShell:
         threading.Thread(target=loop, name="tsabot-show", daemon=True).start()
 
     # ---------------------------------------------------------- main loop
-    def run(self, fragment: str = "") -> None:
+    def run(self, fragment: str = "", after=None) -> None:
+        """Blocks until the app quits. `after` (optional) runs in a thread once the window exists."""
         self.ctl.hooks.append(self.on_event)
         self.start_tray()
         wv = self.webview
@@ -355,7 +356,10 @@ class DesktopShell:
                                                background_color="#070a12", hidden=self.start_hidden and self.tray_ok,
                                                text_select=True)
                 self.window.events.closing += self.on_closing
-                wv.start(private_mode=True)
+                if after is not None:
+                    wv.start(after, private_mode=True)
+                else:
+                    wv.start(private_mode=True)
                 self.done.set()
                 return
             except Exception as e:
@@ -364,10 +368,52 @@ class DesktopShell:
         import webbrowser                                     # fallback: browser + tray
         if not self.start_hidden:
             webbrowser.open(self.url + fragment)
-        if not self.tray_ok:
+        if not self.tray_ok and after is None:
             from . import winsys
             winsys.message_box("TSA Bot çalışıyor. Arayüz tarayıcıda açıldı: " + self.url)
+        if after is not None:
+            threading.Thread(target=after, name="tsabot-after", daemon=True).start()
         self.done.wait()
+
+
+def gui_check(shell: DesktopShell, out_path: Path) -> None:
+    """--guitest: the real window and tray icon of the packaged app (run on Windows in CI).
+    Page loaded and rendered, X hides to the tray instead of quitting, window shows again, 'quit' works."""
+    res = {"ok": False, "steps": [], "errors": []}
+
+    def step(name, ok):
+        (res["steps"] if ok else res["errors"]).append(name)
+    try:
+        w = shell.window
+        step("window created", w is not None)
+        if w is not None:
+            ev = w.events.loaded
+            t0 = time.time()
+            while time.time() - t0 < 60 and not (ev.is_set() if hasattr(ev, "is_set") else False):
+                time.sleep(0.2)
+            step("page loaded", ev.is_set() if hasattr(ev, "is_set") else True)
+            seen = None
+            for _ in range(60):
+                try:
+                    seen = w.evaluate_js("document.title + '|' + (document.getElementById('setup-form')"
+                                         ".classList.contains('hidden') ? 'login' : 'setup')")
+                    if seen == "TSA Bot|setup":
+                        break
+                except Exception as e:
+                    seen = f"error {type(e).__name__}: {e}"
+                time.sleep(0.5)
+            step(f"ui rendered ({seen})", seen == "TSA Bot|setup")
+        step("tray icon", shell.tray_ok)
+        step("X hides to the tray", shell.on_closing() is False and not shell.quitting and not shell.done.is_set())
+        shell.show()
+        time.sleep(1.0)
+        step("window shown again", not shell.done.is_set())
+        res["ok"] = not res["errors"]
+    except Exception:
+        res["errors"].append(traceback.format_exc()[-2000:])
+    finally:
+        out_path.write_text(json.dumps(res, indent=1), encoding="utf-8")
+        shell.quit()                                      # no open positions: quits without a question
 
 
 # ------------------------------------------------------------------ self test (CI / support)
@@ -442,6 +488,7 @@ def main(argv=None) -> int:
     ap.add_argument("--data-dir", default=None)
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--selftest", action="store_true")
+    ap.add_argument("--guitest", action="store_true", help="pencere + tepsi testi (CI)")
     a = ap.parse_args(argv)
 
     from .config import default_data_dir
@@ -490,13 +537,24 @@ def main(argv=None) -> int:
         log.warning("pystray unavailable: %s", e)
     shell = DesktopShell(srv, url, start_hidden=a.minimized, webview_mod=webview_mod, pystray_mod=pystray_mod)
     shell.watch_show_requests(show_flag)
+    gui_out = data_dir / "guitest.json"
+    after = None
+    if a.guitest:
+        def watchdog():                                   # never hang a CI job
+            gui_out.write_text(json.dumps({"ok": False, "errors": ["timeout"]}), encoding="utf-8")
+            os._exit(3)
+        threading.Timer(180, watchdog).start()
+        after = lambda: gui_check(shell, gui_out)         # noqa: E731
     try:
-        shell.run(frag)
+        shell.run(frag, after=after)
     finally:
         if not shell.quitting:                            # window closed without the tray (e.g. no tray support)
             shell.quitting = True
             shell._shutdown()
         lock.release()
+    if a.guitest:
+        ok = gui_out.exists() and json.loads(gui_out.read_text(encoding="utf-8")).get("ok")
+        os._exit(0 if ok else 1)
     return 0
 
 

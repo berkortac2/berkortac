@@ -254,6 +254,20 @@ def test_real_server_thread_and_controller_calls(tmp_path):
     assert not srv.thread.is_alive()
 
 
+def test_gui_check_with_a_fake_window(tmp_path):
+    from tsabot.desktop import gui_check
+    s = shell()
+    ev = threading.Event()
+    ev.set()
+    s.window.events = types.SimpleNamespace(loaded=ev, closing=None)
+    s.window.evaluate_js = lambda js: "TSA Bot|setup"
+    gui_check(s, tmp_path / "g.json")
+    out = json.loads((tmp_path / "g.json").read_text())
+    assert out["ok"] and not out["errors"] and "X hides to the tray" in out["steps"]
+    s.done.wait(5)
+    assert s.server.stopped and "hide" in s.window.calls and "destroy" in s.window.calls
+
+
 def test_selftest(tmp_path):
     from tsabot.desktop import selftest
     rc = selftest(tmp_path)

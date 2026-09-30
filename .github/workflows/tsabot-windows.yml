@@ -54,6 +54,16 @@ jobs:
           Get-Content (Join-Path $d "selftest.json")
           if ($p.ExitCode -ne 0) { throw "self test failed ($($p.ExitCode))" }
 
+      - name: Window + tray test of the finished exe (WebView2 window, X hides to tray, quit)
+        timeout-minutes: 6
+        run: |
+          $d = Join-Path $env:RUNNER_TEMP "tsa-guitest"
+          $p = Start-Process -FilePath "dist\TSABot\TSABot.exe" -ArgumentList "--guitest", "--data-dir", "`"$d`"" -Wait -PassThru
+          Get-Content (Join-Path $d "guitest.json")
+          $log = Join-Path $d "logs\tsabot.log"
+          if (Test-Path $log) { Get-Content $log -Tail 40 }
+          if ($p.ExitCode -ne 0) { throw "gui test failed ($($p.ExitCode))" }
+
       - name: Readme for the download
         run: |
           @"
