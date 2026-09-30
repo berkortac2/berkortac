@@ -5,6 +5,9 @@ Binance USDT-M **perpetual futures** grafiklerinde (TradingView'da `BINANCE:<COI
 Pine Script v6 göstergesi ve onu bulan Python araştırma motoru.
 
 - Sonuçlar ve yüzdeler: [`reports/SONUCLAR.md`](reports/SONUCLAR.md)
+- **5 dk derin araştırma (2. tur), 36 coinlik 5 dk tarayıcı ve bot sonuçları:** [`reports/SONUCLAR_5DK_BOT.md`](reports/SONUCLAR_5DK_BOT.md)
+- **5 dk çoklu coin tarayıcı (Pine):** [`pine/TradingviewSignalAgent_Scanner5m.pine`](pine/TradingviewSignalAgent_Scanner5m.pine)
+- **Binance USDT-M futures botu (arayüzlü):** [`bot/README.md`](bot/README.md)
 - İnternet araştırması özeti ve kaynaklar: [`research/ARASTIRMA.md`](research/ARASTIRMA.md)
 - TradingView kodu: [`pine/TradingviewSignalAgent.pine`](pine/TradingviewSignalAgent.pine) (gösterge) ve
   [`pine/TradingviewSignalAgent_Strategy.pine`](pine/TradingviewSignalAgent_Strategy.pine) (Strategy Tester sürümü)
@@ -32,6 +35,13 @@ Pine Script v6 göstergesi ve onu bulan Python araştırma motoru.
 Bulunan ana desen: **yüksek volatilitede (ATR/fiyat yüksek) momentumun sert negatife dönmesi → kısa süreli tepki
 alımı**; 1G/1H kurallarında mum-metrik ve metrik-metrik korelasyonlar (kapanış–MACD, kapanış–RSI, RSI–MFI, RSI–hacim)
 ve MACD uyumsuzluğu belirleyici. SAT kuralları yalnızca 4s, 1G ve 1H'de doğrulamadan geçebildi.
+
+## 2. tur (5 dk) özeti
+
+2017–2026 arası 8,6 milyon 5 dk mumla AL ve SAT ayrı ayrı 2.000 yeni deneme yapıldı. Doğrulamada çok güçlü görünen
+yeni kurallar kilitli testte (Şubat–Eylül 2026) ilk turun 5 dk modelini geçemedi; önceden yazılmış seçim kuralı gereği
+**5 dk modeli değişmedi**. 5 dk'da komisyonu karşılayan SAT kuralı yine yok. Bot bu modeli %8 acil stop, 8 pozisyon,
+1x kaldıraçla çalıştırır. Ayrıntı ve dürüst risk tablosu: [`reports/SONUCLAR_5DK_BOT.md`](reports/SONUCLAR_5DK_BOT.md).
 
 ## TradingView'a kurulum
 

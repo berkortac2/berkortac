@@ -1,5 +1,5 @@
 {
- "name": "TSA 5m kural modeli (v1, ilk ara\u015ft\u0131rma)",
+ "name": "TSA 5m kural modeli v1 (2. tur derin aramada da en iyi kald\u0131)",
  "tf": "5m",
  "version": 1,
  "long": {
@@ -34,6 +34,71 @@
  },
  "cost_rt": 0.0014,
  "stats": {
-  "rows": []
+  "rows": [
+   {
+    "group": "Arama coinleri (12)",
+    "side": "long",
+    "trades": 111,
+    "dir_hit": 0.6216216216216216,
+    "win_rate": 0.5855855855855856,
+    "avg_net": 0.0039291675131945,
+    "trades_per_coin_day": 0.0411848370539855
+   },
+   {
+    "group": "Di\u011fer e\u011fitim coinleri (8)",
+    "side": "long",
+    "trades": 72,
+    "dir_hit": 0.5972222222222222,
+    "win_rate": 0.5833333333333334,
+    "avg_net": 0.005561151299285,
+    "trades_per_coin_day": 0.0400717333498237
+   },
+   {
+    "group": "G\u00f6r\u00fclmemi\u015f coinler (6)",
+    "side": "long",
+    "trades": 121,
+    "dir_hit": 0.6115702479338843,
+    "win_rate": 0.5702479338842975,
+    "avg_net": 0.0031207663090705,
+    "trades_per_coin_day": 0.0897903654690495
+   },
+   {
+    "group": "Hi\u00e7 kullan\u0131lmam\u0131\u015f coinler (10)",
+    "side": "long",
+    "trades": 185,
+    "dir_hit": 0.5675675675675675,
+    "win_rate": 0.5513513513513514,
+    "avg_net": 0.0043410461871522,
+    "trades_per_coin_day": 0.082369674107971
+   },
+   {
+    "group": "Hi\u00e7 kullan\u0131lmam\u0131\u015f 10 coin, 2025-01\u21922026-02",
+    "side": "long",
+    "trades": 707,
+    "dir_hit": 0.5445544554455446,
+    "win_rate": 0.5289957567185289,
+    "avg_net": -0.0010966332909675,
+    "trades_per_coin_day": 0.1722872808501996
+   },
+   {
+    "group": "Bot (%8 acil stop), kilitli d\u00f6nem, 36 coin",
+    "side": "long",
+    "trades": 489,
+    "dir_hit": 0.5950920245398773,
+    "win_rate": 0.5685071574642127,
+    "avg_net": 0.0040605598370828605,
+    "trades_per_coin_day": 0.06063988095238095
+   },
+   {
+    "group": "Bot (%8 acil stop), 2025-01\u21922026-02, 10 coin",
+    "side": "long",
+    "trades": 760,
+    "dir_hit": 0.5552631578947368,
+    "win_rate": 0.5157894736842106,
+    "avg_net": 0.00742681887919788,
+    "trades_per_coin_day": 0.18491484184914841
+   }
+  ],
+  "note": "Kilitli test 2026-02-16 \u2192 2026-09-28, komisyon %0.05 + kayma %0.02 her taraf"
  }
 }

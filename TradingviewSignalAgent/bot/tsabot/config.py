@@ -32,8 +32,8 @@ LIMITS = {"budget_usdt": (5.0, 1_000_000.0), "max_positions": (1, 20), "leverage
 class Settings:
     mode: str = "paper"                 # paper | testnet | live | replay (offline demo)
     budget_usdt: float = 100.0          # hard cap on total margin the bot may use
-    max_positions: int = 4              # concurrent positions; margin per position = budget / max_positions
-    leverage: int = 2
+    max_positions: int = 8              # concurrent positions; margin per position = budget / max_positions
+    leverage: int = 1                   # 1x: portfolio simulation showed >50% drawdowns at 2x in 2025
     allow_long: bool = True
     allow_short: bool = True
     daily_loss_limit_pct: float = 5.0   # of budget; no new entries for the rest of the UTC day

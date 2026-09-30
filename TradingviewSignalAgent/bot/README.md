@@ -15,7 +15,7 @@ Tradingview Signal Agent'ın **5 dakikalık** modelini (Pine göstergesindeki ku
 Senin tercihin ve araştırmanın verisi futures (perpetual) olduğu için **futures** seçildi:
 modeller `BINANCE:XXXUSDT.P` verisiyle eğitildi ve test edildi; SAT (short) sinyalleri ancak futures'ta
 kazanca dönüşebilir. Spot'ta komisyon (%0.1/taraf) futures taker'dan (%0.05) **daha yüksek**,
-dolayısıyla spot bu strateji için daha pahalı. Varsayılan kaldıraç 2x ve **izole marjin**: bir pozisyonun
+dolayısıyla spot bu strateji için daha pahalı. Varsayılan kaldıraç **1x**, 8 eş zamanlı pozisyon ve **izole marjin**: bir pozisyonun
 en kötü durumda kaybedebileceği para o pozisyona ayrılan marjinle sınırlı.
 
 ## Kurulum (Windows / macOS / Linux)
@@ -67,7 +67,7 @@ anahtarı ortam değişkeniyle de verebilirsin: `BINANCE_API_KEY`, `BINANCE_API_
 ## Bütçe ve risk ayarları
 
 - **Bütçe (USDT)**: botun aynı anda kullanabileceği toplam marjin. Pozisyon başı marjin =
-  bütçe / *eş zamanlı pozisyon*. Örnek: 200 USDT, 4 pozisyon, 2x → her işlem 50 USDT marjin, 100 USDT büyüklük.
+  bütçe / *eş zamanlı pozisyon*. Örnek: 200 USDT, 8 pozisyon, 1x → her işlem 25 USDT marjin, 25 USDT büyüklük.
 - Zarar ettikçe kullanılabilir bütçe küçülür; kâr **bileşik** kutusu işaretli değilse tekrar kullanılmaz.
   Böylece toplam risk hiçbir zaman verdiğin bütçeyi aşmaz.
 - **Günlük zarar limiti**: aşılınca o gün (UTC) yeni işlem açılmaz.
@@ -76,6 +76,16 @@ anahtarı ortam değişkeniyle de verebilirsin: `BINANCE_API_KEY`, `BINANCE_API_
   (bot kapalıyken ani çöküşe karşı).
 - **Acil kapat** düğmesi: botun açtığı tüm pozisyonları piyasa fiyatından kapatır ve durdurur.
 - Bot, senin elle açtığın pozisyonların olduğu coinlere dokunmaz.
+
+## Ne beklemeli (geçmiş simülasyon, 1.000 USDT, 8 pozisyon, 1x, %8 acil stop)
+
+| Dönem | Sonuç | Maks. düşüş |
+|---|---|---|
+| Şubat–Eylül 2026 (kilitli test, 36 coin) | +%11.1 | %4.2 |
+| Ocak 2025–Şubat 2026 (hiç kullanılmamış 10 coin) | +%5.2 | %24.0 |
+
+Kârlar olaylara bağlı (sert düşüş sonrası tepki alımları); sakin aylarda küçük zararlar olur. 2x kaldıraçta aynı
+dönemlerde düşüş %50'yi aştı. Ayrıntı: [`../reports/SONUCLAR_5DK_BOT.md`](../reports/SONUCLAR_5DK_BOT.md).
 
 ## Bot nasıl işlem yapar
 
