@@ -1,0 +1,5 @@
+config,tp,sl,H,trades,dir_hit,win_rate,avg_net,tstat,pos_folds,trades_per_coin_day,fold0,fold1,fold2,fold3
+mirror_of_v1,1.0,1.0,12,0,,,,,0.0,0.0,,,,
+mirror_of_v1,1.5,1.0,12,0,,,,,0.0,0.0,,,,
+mirror_of_v1,1.0,1.5,24,0,,,,,0.0,0.0,,,,
+mirror_of_v1,2.0,2.0,48,0,,,,,0.0,0.0,,,,

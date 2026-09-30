@@ -21,13 +21,21 @@ class DirModel:
     H: int = 24                                  # time exit after H bars
     tp_atr: float | None = None
     sl_atr: float | None = None
+    exit_rules: list = field(default_factory=list)   # indicator exit ("ÇIK"), checked on every closed bar
 
-    def match(self, row: dict) -> int:
-        """Index of the first matching rule or -1."""
-        for i, rule in enumerate(self.rules):
+    @staticmethod
+    def _first(rules, row: dict) -> int:
+        for i, rule in enumerate(rules):
             if all(bool(OPS[op](row.get(f, 0.0), v)) for f, op, v in rule):
                 return i
         return -1
+
+    def match(self, row: dict) -> int:
+        """Index of the first matching entry rule or -1."""
+        return self._first(self.rules, row)
+
+    def should_exit(self, row: dict) -> bool:
+        return bool(self.exit_rules) and self._first(self.exit_rules, row) >= 0
 
 
 @dataclass
@@ -44,13 +52,16 @@ class Signal:
 class Strategy:
     def __init__(self, model: dict):
         self.model = model
-        self.long = DirModel(**{k: model.get("long", {}).get(k, DirModel.__dataclass_fields__[k].default)
-                                for k in ("rules", "H", "tp_atr", "sl_atr")} if model.get("long") else {})
-        self.short = DirModel(**{k: model.get("short", {}).get(k, DirModel.__dataclass_fields__[k].default)
-                                 for k in ("rules", "H", "tp_atr", "sl_atr")} if model.get("short") else {})
-        self.long.rules = [[tuple(c) for c in r] for r in (self.long.rules or [])]
-        self.short.rules = [[tuple(c) for c in r] for r in (self.short.rules or [])]
-        self.features_used = sorted({c[0] for d in (self.long, self.short) for r in d.rules for c in r})
+        def mk(spec):
+            spec = spec or {}
+            d = DirModel(rules=spec.get("rules") or [], H=int(spec.get("H", 24)), tp_atr=spec.get("tp_atr"),
+                         sl_atr=spec.get("sl_atr"), exit_rules=spec.get("exit_rules") or [])
+            d.rules = [[tuple(c) for c in r] for r in d.rules]
+            d.exit_rules = [[tuple(c) for c in r] for r in d.exit_rules]
+            return d
+        self.long, self.short = mk(model.get("long")), mk(model.get("short"))
+        self.features_used = sorted({c[0] for d in (self.long, self.short) for r in d.rules + d.exit_rules
+                                     for c in r})
 
     @classmethod
     def load(cls, path: Path) -> "Strategy":
@@ -81,6 +92,6 @@ class Strategy:
     def describe(self) -> dict:
         def one(d: DirModel):
             return {"rules": [[list(c) for c in r] for r in d.rules], "H": d.H, "tp_atr": d.tp_atr,
-                    "sl_atr": d.sl_atr}
+                    "sl_atr": d.sl_atr, "exit_rules": [[list(c) for c in r] for r in d.exit_rules]}
         return {"name": self.model.get("name", "5m model"), "long": one(self.long), "short": one(self.short),
                 "stats": self.model.get("stats", {}), "cost_rt": self.model.get("cost_rt")}

@@ -165,30 +165,7 @@ class Engine:
 
         await self._reconcile()
 
-        # 1) exits -------------------------------------------------------------
-        for sym, fill in (await self.broker.closed_by_exchange(dict(self.positions))).items():
-            await self._exit(sym, fill, "TP/SL (borsa)")
-        for sym, pos in list(self.positions.items()):
-            k5 = data.get(sym, (None,))[0]
-            if k5 is None or not len(k5):
-                continue
-            bar = k5.iloc[-1]
-            bt = int(bar["open_time"])
-            if bt <= max(pos.signal_bar, pos.last_bar):
-                continue
-            pos.bars_held += 1
-            pos.last_bar = bt
-            if self.broker.simulated:
-                hit = self._bracket_hit(pos, bar)
-                if hit:
-                    px, why = hit
-                    await self._exit(sym, await self.broker.close(sym, pos.direction, pos.qty, px), why)
-                    continue
-            if pos.bars_held >= pos.H:
-                await self._exit(sym, await self.broker.close(sym, pos.direction, pos.qty, float(bar["close"])),
-                                 f"Süre doldu ({pos.H} mum)")
-
-        # 2) signals -----------------------------------------------------------
+        # 1) evaluate the closed bar for every coin (entry AND exit rules) -----------------------------------------------------------
         loop = asyncio.get_running_loop()
         new = []
         now = self._now()
@@ -208,12 +185,41 @@ class Engine:
             if sig.direction != 0:
                 self.emit("signal", f"{sym} {'AL (long)' if sig.direction > 0 else 'SAT (short)'} sinyali, "
                                     f"kural #{sig.rule + 1}, kapanış {sig.close:g}")
-                if sym not in self.positions:
-                    new.append(sig)
+                new.append(sig)
+
+        # 2) exits: exchange/paper TP-SL, indicator exit (ÇIK), time -------------------------------------------------------------
+        for sym, fill in (await self.broker.closed_by_exchange(dict(self.positions))).items():
+            await self._exit(sym, fill, "TP/SL (borsa)")
+        for sym, pos in list(self.positions.items()):
+            k5 = data.get(sym, (None,))[0]
+            if k5 is None or not len(k5):
+                continue
+            bar = k5.iloc[-1]
+            bt = int(bar["open_time"])
+            if bt <= max(pos.signal_bar, pos.last_bar):
+                continue
+            pos.bars_held += 1
+            pos.last_bar = bt
+            if self.broker.simulated:
+                hit = self._bracket_hit(pos, bar)
+                if hit:
+                    px, why = hit
+                    await self._exit(sym, await self.broker.close(sym, pos.direction, pos.qty, px), why)
+                    continue
+            ev = self.signals.get(sym)
+            dm = self.strategy.params(pos.direction)
+            if ev and ev["bar_time"] == bt and dm.should_exit(ev["features"]):
+                await self._exit(sym, await self.broker.close(sym, pos.direction, pos.qty, float(bar["close"])),
+                                 "ÇIK sinyali (kâr al)")
+                continue
+            if pos.bars_held >= pos.H:
+                await self._exit(sym, await self.broker.close(sym, pos.direction, pos.qty, float(bar["close"])),
+                                 f"Süre doldu ({pos.H} mum)")
 
         # 3) entries -----------------------------------------------------------
         for sig in new:
-            await self._enter(sig)
+            if sig.symbol not in self.positions:
+                await self._enter(sig)
         self._persist()
         tot, _ = self.realized()
         unreal = sum(p.direction * (self.last_prices.get(s, p.entry_price) - p.entry_price) * p.qty
@@ -262,12 +268,13 @@ class Engine:
             entry = entry or sig.close
             tp = entry + d * dm.tp_atr * sig.atr if dm.tp_atr else None
             sl = entry - d * dm.sl_atr * sig.atr if dm.sl_atr else None
-            emergency = None if sl else entry * (1 - d * self.s.emergency_stop_pct / 100)
+            emergency = entry * (1 - d * self.s.emergency_stop_pct / 100)
             self.positions[sym] = Position(sym, d, abs(amt), entry, self._now(), sig.bar_time, dm.H, tp, sl, emergency,
                                            abs(amt) * entry / self.s.leverage, abs(amt) * entry * 0.0005, sig.rule)
             self._persist()
             try:
-                await self.broker.set_brackets(sym, d, tp, sl or emergency, self.rules[sym])
+                await self.broker.set_brackets(sym, d, tp, (max if d > 0 else min)(x for x in (sl, emergency) if x),
+                                               self.rules[sym])
             except Exception as e:
                 self.emit("error", f"{sym} koruma emri verilemedi ({e})")
             self.emit("warn", f"{sym}: yanıtı kaybolan emir borsada dolmuş, pozisyon sahiplenildi ({amt:g} @ {entry:g})")
@@ -303,20 +310,21 @@ class Engine:
         d = sig.direction
         tp = fill.price + d * dm.tp_atr * sig.atr if dm.tp_atr else None
         sl = fill.price - d * dm.sl_atr * sig.atr if dm.sl_atr else None
-        emergency = None if sl else fill.price * (1 - d * self.s.emergency_stop_pct / 100)
+        emergency = fill.price * (1 - d * self.s.emergency_stop_pct / 100)
+        stop = (max if d > 0 else min)(x for x in (sl, emergency) if x is not None)
         pos = Position(sig.symbol, d, fill.qty, fill.price, self._now(), sig.bar_time, dm.H, tp, sl, emergency,
                        fill.qty * fill.price / self.s.leverage, fill.fee, sig.rule)
         self.positions[sig.symbol] = pos
         self._persist()                      # recorded before anything else can fail
         try:
-            await self.broker.set_brackets(sig.symbol, d, tp, sl or emergency, rules)
+            await self.broker.set_brackets(sig.symbol, d, tp, stop, rules)
         except Exception as e:
             self.emit("error", f"{sig.symbol} TP/SL emri verilemedi ({e}); pozisyon kapatılıyor")
             await self._exit(sig.symbol, await self.broker.close(sig.symbol, d, fill.qty, fill.price), "Koruma hatası")
             return
         self.emit("trade", f"{sig.symbol} {'LONG' if d > 0 else 'SHORT'} açıldı: {fill.qty:g} @ {fill.price:g}, "
                            f"marjin {pos.margin:.2f} USDT" + (f", TP {tp:.6g}" if tp else "")
-                  + (f", SL {sl:.6g}" if sl else f", acil stop {emergency:.6g}") + f", en geç {dm.H} mum")
+                  + f", stop {stop:.6g}" + (" + ÇIK sinyali" if dm.exit_rules else "") + f", en geç {dm.H} mum")
 
     async def _exit(self, sym: str, fill: Fill, reason: str) -> None:
         pos = self.positions.pop(sym, None)

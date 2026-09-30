@@ -219,6 +219,8 @@ async function loadModel() {
       el.append(h("div", { class: "meta" }, h("span", { class: "badge", text: "süre " + d.H + " mum" }),
         h("span", { class: "badge", text: d.tp_atr ? "TP " + d.tp_atr + "×ATR" : "TP yok" }), h("span", { class: "badge", text: d.sl_atr ? "SL " + d.sl_atr + "×ATR" : "SL yok (acil stop)" })));
       if (!d.rules || !d.rules.length) el.append(h("div", { class: "muted", text: "Bu yönde doğrulamadan geçen kural yok." }));
+      (d.exit_rules || []).forEach((r) => el.append(h("div", { class: "rule" }, h("b", { text: "ÇIK (kâr al)  " }),
+        ...r.flatMap((c, j) => [j ? h("span", { class: "and", text: "  VE  " }) : null, c[0] + " " + c[1] + " " + Number(c[2]).toFixed(4)]))));
       (d.rules || []).forEach((r, i) => el.append(h("div", { class: "rule" }, h("b", { text: "#" + (i + 1) + "  " }),
         ...r.flatMap((c, j) => [j ? h("span", { class: "and", text: "  VE  " }) : null, c[0] + " " + c[1] + " " + Number(c[2]).toFixed(4)]))));
     }

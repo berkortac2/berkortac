@@ -206,6 +206,7 @@ grpS = "Sinyal"
 i_thrMult  = input.float(1.0, "Esik carpani (1.0 = test edilen ayar)", minval = 0.5, maxval = 3.0, step = 0.05, group = grpS, tooltip = "Buyuk deger = daha az ama daha secici sinyal")
 i_showTPSL = input.bool(true, "TP / SL seviyelerini ciz", group = grpS)
 i_showScore = input.bool(false, "Skoru etikette goster", group = grpS)
+i_showExit = input.bool(true, "Cikis (CIK / kar al) etiketlerini goster", group = grpS)
 i_onlyOk   = input.bool(true, "Sadece kilitli testte karli cikan TF'lerde sinyal ver", group = grpS, tooltip = "Kapatilirsa testte zarar eden zaman dilimlerinde de sinyal uretilir")
 grpT = "Coklu zaman dilimi tablosu"
 i_table = input.bool(true, "Tabloyu goster", group = grpT)
@@ -242,6 +243,8 @@ i_ltf  = input.bool(false, "Grafikten dusuk TF'leri de hesapla (yavas)", group =
     OK["_default"] = "false"
     htf = {tf: f'"{HTF_OF[tf]}"' for tf in TFS}
     htf["_default"] = '"D"'
+    EM = {tf: _num(models[tf].get("emergency_stop", 0.0)) for tf in tfs}
+    EM["_default"] = "0.0"
     # optional per-direction parameters for SAT (short); default = same as AL
     Hs = {tf: str(int(models[tf].get("H_short", models[tf]["H"]))) for tf in tfs}
     Hs["_default"] = "10"
@@ -253,6 +256,7 @@ i_ltf  = input.bool(false, "Grafikten dusuk TF'leri de hesapla (yavas)", group =
         sw("pHs", Hs, "int"), sw("pTPs", TPs, "float"), sw("pSLs", SLs, "float"),
         sw("pH", H, "int"), sw("pTP", TP, "float"), sw("pSL", SL, "float"), sw("pThrL", TL, "float"),
         sw("pThrS", TS, "float"), sw("pDirHit", DH, "float"), sw("pWin", WR, "float"), sw("pOk", OK, "bool"), sw("htfOf", htf, "string"),
+        sw("pEmerg", EM, "float"),
         # defined after pH/pTP/pSL: Pine needs functions declared before use
         "pHd(simple int tfi, int d) => d < 0 ? pHs(tfi) : pH(tfi)",
         "pTPd(simple int tfi, int d) => d < 0 ? pTPs(tfi) : pTP(tfi)",
@@ -263,6 +267,15 @@ i_ltf  = input.bool(false, "Grafikten dusuk TF'leri de hesapla (yavas)", group =
 tfIndexOf(simple int sec) =>
     sec <= 90 ? 0 : sec <= 450 ? 1 : sec <= 1350 ? 2 : sec <= 2700 ? 3 : sec <= 7200 ? 4 : sec <= 28800 ? 5 : sec <= 259200 ? 6 : 7
 """
+    exit_tfs = {i: models[tf]["exit_rules"] for i, tf in enumerate(TFS) if tf in models and models[tf].get("exit_rules")}
+    ex_feats = sorted({c[0] for rr in exit_tfs.values() for r in rr for c in r})
+    ex_block, ex_var = feature_block(ex_feats) if ex_feats else ("", {})
+    ex_expr = "0.0"
+    for i, rr in exit_tfs.items():
+        cond = " or ".join("(" + " and ".join(f"{ex_var[f]} {op} {float(v)!r}" for f, op, v in r) + ")" for r in rr)
+        ex_expr = f"tfi == {i} ? (({cond}) ? 1.0 : 0.0) : " + ex_expr
+    exit_fn = "\n".join(["", "// indicator exit (CIK / take profit) for the AL position", "f_exit(simple int tfi) =>",
+                         BASE.strip("\n"), ex_block, f"    {ex_expr}"]) if exit_tfs else "\nf_exit(simple int tfi) => 0.0"
     body = ["f_model(simple int tfi) =>", BASE.strip("\n"), block, "    float sc = 0.0", "    switch tfi"]
     for i, tf in enumerate(TFS):
         if tf not in models:
@@ -291,6 +304,7 @@ tfIndexOf(simple int sec) =>
 // ---------------------------------------------------------------- chart timeframe model
 int   CT   = tfIndexOf(timeframe.in_seconds())
 float sc0  = f_model(CT)
+float exS  = f_exit(CT)
 float atrC = ta.atr(14)
 float thrL = pThrL(CT) > 0 ? math.min(pThrL(CT) * i_thrMult, 0.999) : pThrL(CT)
 float thrS = pThrS(CT) < 0 ? math.max(pThrS(CT) * i_thrMult, -0.999) : pThrS(CT)
@@ -315,6 +329,7 @@ var array<int>   qDir = array.new<int>()
 float costRT = 2 * (0.0005 + 0.0002)
 bool  exitNow = false
 bool  timeExit = false
+bool  sigExit = false
 float exitPx  = na
 if barstate.isconfirmed
     // direction hit is judged H bars after the signal (close[t+H] vs entry), like the backtest
@@ -329,6 +344,8 @@ if barstate.isconfirmed
             entry := open
             tpP := entry + pos * pTPd(CT, pos) * atrSig
             slP := entry - pos * pSLd(CT, pos) * atrSig
+            if pEmerg(CT) > 0
+                slP := pos > 0 ? math.max(slP, entry * (1 - pEmerg(CT))) : math.min(slP, entry * (1 + pEmerg(CT)))
             array.push(qBar, sigBar + pHd(CT, pos))
             array.push(qEnt, entry)
             array.push(qDir, pos)
@@ -349,6 +366,10 @@ if barstate.isconfirmed
             else if low <= tpP
                 exitNow := true
                 exitPx := bar_index > sigBar + 1 ? math.min(tpP, open) : tpP
+        if not exitNow and exS > 0 and pos > 0
+            exitNow := true
+            sigExit := true
+            exitPx := close
         if not exitNow and bar_index >= sigBar + pHd(CT, pos)
             exitNow := true
             timeExit := true
@@ -357,6 +378,12 @@ if barstate.isconfirmed
             float net = pos * (exitPx / entry - 1) - costRT
             nTr += 1
             nWin += net > 0 ? 1 : 0
+            if i_showExit
+                label.new(bar_index, pos > 0 ? high : low, "ÇIK " + str.tostring(net * 100, "#.##") + "%",
+                     style = pos > 0 ? label.style_label_down : label.style_label_up,
+                     color = net > 0 ? color.new(color.green, 0) : color.new(color.red, 0), textcolor = color.white, size = size.tiny)
+            alert('{{"signal":"EXIT","symbol":"' + syminfo.tickerid + '","tf":"' + timeframe.period + '","price":'
+                 + str.tostring(exitPx) + ',"net_pct":' + str.tostring(net * 100) + '}}', alert.freq_once_per_bar_close)
             pos := 0
 
 bool longSig  = barstate.isconfirmed and pos == 0 and rawLong
@@ -374,6 +401,7 @@ if longSig or shortSig
 
 alertcondition(longSig, "TSA AL", "TSA AL sinyali: {{{{ticker}}}} {{{{interval}}}} fiyat {{{{close}}}}")
 alertcondition(shortSig, "TSA SAT", "TSA SAT sinyali: {{{{ticker}}}} {{{{interval}}}} fiyat {{{{close}}}}")
+alertcondition(exitNow, "TSA CIK", "TSA CIK (kar al / pozisyondan cik): {{{{ticker}}}} {{{{interval}}}} fiyat {{{{close}}}}")
 plotshape(longSig, "AL", shape.triangleup, location.belowbar, color.teal, display = display.data_window)
 plotshape(shortSig, "SAT", shape.triangledown, location.abovebar, color.maroon, display = display.data_window)
 plot(sc0, "TSA skor", display = display.data_window)
@@ -388,6 +416,8 @@ float tpTicksS = pTPd(CT, -1) * atrC / syminfo.mintick
 float slTicksS = pSLd(CT, -1) * atrC / syminfo.mintick
 if timeExit and strategy.position_size != 0
     strategy.close_all(comment = "zaman", immediately = true)
+if sigExit and strategy.position_size != 0
+    strategy.close_all(comment = "CIK", immediately = true)
 if longSig
     strategy.entry("L", strategy.long)
     if pTPd(CT, 1) < 100 or pSLd(CT, 1) < 100
@@ -448,6 +478,6 @@ if i_table and barstate.islast
         inputs = "\n".join(ln if not ln.startswith("i_thrMult") else
                            "i_thrMult  = 1.0  // kural modeli ikili (AL/SAT/yok) skor uretir; esik carpani kullanilmaz"
                            for ln in inputs.split("\n"))
-    parts = [head, doc, inputs, HELPERS, HTF_FUNC if uses_htf else "", consts, tf_index, model_fn, main]
+    parts = [head, doc, inputs, HELPERS, HTF_FUNC if uses_htf else "", consts, tf_index, model_fn, exit_fn, main]
     parts.append(strat if strategy else table)
     return "\n".join(parts)

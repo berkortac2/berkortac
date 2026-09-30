@@ -1,8 +1,9 @@
 //@version=6
 // TSA 5m Coin Tarayici - Tradingview Signal Agent. 36 Binance USDT-M perpetual coins on 5 minutes.
-// Signal on the CLOSE of a 5m candle (no repaint): the table shows which coins gave AL (long) / SAT (short),
-// one alert names every coin that just signalled. Use it on a 5 minute chart (any symbol).
-// Rules and parameters come from the replayed walk-forward research (see reports/SONUCLAR.md). 
+// AL = long entry on the CLOSE of a 5m candle (no repaint). The scanner then follows each AL position like the
+// bot does and shows CIK (take profit / exit) when WaveTrend reaches overbought, the stop is hit
+// (3 x ATR or 8%) or 96 candles have passed. One alert lists every coin that just gave AL or CIK.
+// Rules/parameters: replayed walk-forward research (reports/SONUCLAR_5DK_BOT.md). 
 // Not investment advice.
 indicator("TSA 5m Coin Tarayici", shorttitle = "TSA Scan 5m", overlay = true, calc_bars_count = 6000)
 
@@ -135,6 +136,10 @@ scan() =>
     float x_atr_pct = nz(sdiv(atr14, close) * 100.0)
     [dip, dim, adxV] = ta.dmi(14, 14)
     float x_di = nz((dip - dim) / 50.0)
+    float wEsa = ta.ema(hlc3, 10)
+    float wD = ta.ema(math.abs(hlc3 - wEsa), 10)
+    float wt1 = ta.ema(sdiv(hlc3 - wEsa, 0.015 * wD), 11)
+    float x_wt = nz(wt1 / 50.0)
     [hA, hB, hC, hD] = hourlyCtx()
     float x_htf_rsi = nz(hA)
     float x_htf_hist_atr = nz(hB)
@@ -142,17 +147,20 @@ scan() =>
     float x_htf_chan20 = nz(hD)
     bool L = (x_di <= -0.45836924761533737 and x_atr_pct >= 0.7200642794370649 and x_htf_hist_atr <= -0.16961825788021087)
     bool S = false
+    bool X = (x_wt >= 1.0)
     float sig = L ? 1.0 : S ? -1.0 : 0.0
+    float xf = X ? 1.0 : 0.0
     // previous (closed) candle + lookahead_on in the caller = no repaint
-    [sig[1], float(time[1]), close[1]]
+    [sig[1], float(time[1]), close[1], xf[1], low[1], high[1], atr14[1]]
 
 grp = "Coinler (Binance USDT-M perpetual, en fazla 39)"
-i_holdL = input.int(24, "AL sinyali tabloda kac mum kalsin", minval = 1, group = "Tablo")
-i_holdS = input.int(24, "SAT sinyali tabloda kac mum kalsin", minval = 1, group = "Tablo")
-i_onlyActive = input.bool(false, "Tabloda sadece aktif sinyalleri goster", group = "Tablo")
+i_exitKeep = input.int(12, "CIK tabloda kac mum kalsin", minval = 1, group = "Tablo")
+i_onlyActive = input.bool(false, "Tabloda sadece aktif AL / yeni CIK goster", group = "Tablo")
 i_pos = input.string("Sag Ust", "Tablo konumu", options = ["Sag Ust", "Sag Alt", "Sol Ust", "Sol Alt"], group = "Tablo")
-i_long = input.bool(true, "AL (long) sinyalleri", group = "Sinyal")
-i_short = input.bool(true, "SAT (short) sinyalleri", group = "Sinyal")
+i_H = input.int(96, "En uzun tutma (mum)", minval = 1, group = "Cikis")
+i_sl = input.float(3.0, "Zarar kes (x ATR, 0 = yok)", minval = 0, step = 0.5, group = "Cikis")
+i_em = input.float(8, "Acil stop (%)", minval = 0, step = 0.5, group = "Cikis")
+i_useX = input.bool(true, "CIK sinyali (WaveTrend asiri alim) ile kar al", group = "Cikis")
 
 sym00 = input.symbol("BINANCE:BTCUSDT.P", "1", group = grp, inline = "c0")
 sym01 = input.symbol("BINANCE:ETHUSDT.P", "2", group = grp, inline = "c0")
@@ -191,138 +199,178 @@ sym33 = input.symbol("BINANCE:TIAUSDT.P", "34", group = grp, inline = "c11")
 sym34 = input.symbol("BINANCE:ICPUSDT.P", "35", group = grp, inline = "c11")
 sym35 = input.symbol("BINANCE:WIFUSDT.P", "36", group = grp, inline = "c11")
 
-[g00, t00, p00] = request.security(sym00, "5", scan(), lookahead = barmerge.lookahead_on)
-[g01, t01, p01] = request.security(sym01, "5", scan(), lookahead = barmerge.lookahead_on)
-[g02, t02, p02] = request.security(sym02, "5", scan(), lookahead = barmerge.lookahead_on)
-[g03, t03, p03] = request.security(sym03, "5", scan(), lookahead = barmerge.lookahead_on)
-[g04, t04, p04] = request.security(sym04, "5", scan(), lookahead = barmerge.lookahead_on)
-[g05, t05, p05] = request.security(sym05, "5", scan(), lookahead = barmerge.lookahead_on)
-[g06, t06, p06] = request.security(sym06, "5", scan(), lookahead = barmerge.lookahead_on)
-[g07, t07, p07] = request.security(sym07, "5", scan(), lookahead = barmerge.lookahead_on)
-[g08, t08, p08] = request.security(sym08, "5", scan(), lookahead = barmerge.lookahead_on)
-[g09, t09, p09] = request.security(sym09, "5", scan(), lookahead = barmerge.lookahead_on)
-[g10, t10, p10] = request.security(sym10, "5", scan(), lookahead = barmerge.lookahead_on)
-[g11, t11, p11] = request.security(sym11, "5", scan(), lookahead = barmerge.lookahead_on)
-[g12, t12, p12] = request.security(sym12, "5", scan(), lookahead = barmerge.lookahead_on)
-[g13, t13, p13] = request.security(sym13, "5", scan(), lookahead = barmerge.lookahead_on)
-[g14, t14, p14] = request.security(sym14, "5", scan(), lookahead = barmerge.lookahead_on)
-[g15, t15, p15] = request.security(sym15, "5", scan(), lookahead = barmerge.lookahead_on)
-[g16, t16, p16] = request.security(sym16, "5", scan(), lookahead = barmerge.lookahead_on)
-[g17, t17, p17] = request.security(sym17, "5", scan(), lookahead = barmerge.lookahead_on)
-[g18, t18, p18] = request.security(sym18, "5", scan(), lookahead = barmerge.lookahead_on)
-[g19, t19, p19] = request.security(sym19, "5", scan(), lookahead = barmerge.lookahead_on)
-[g20, t20, p20] = request.security(sym20, "5", scan(), lookahead = barmerge.lookahead_on)
-[g21, t21, p21] = request.security(sym21, "5", scan(), lookahead = barmerge.lookahead_on)
-[g22, t22, p22] = request.security(sym22, "5", scan(), lookahead = barmerge.lookahead_on)
-[g23, t23, p23] = request.security(sym23, "5", scan(), lookahead = barmerge.lookahead_on)
-[g24, t24, p24] = request.security(sym24, "5", scan(), lookahead = barmerge.lookahead_on)
-[g25, t25, p25] = request.security(sym25, "5", scan(), lookahead = barmerge.lookahead_on)
-[g26, t26, p26] = request.security(sym26, "5", scan(), lookahead = barmerge.lookahead_on)
-[g27, t27, p27] = request.security(sym27, "5", scan(), lookahead = barmerge.lookahead_on)
-[g28, t28, p28] = request.security(sym28, "5", scan(), lookahead = barmerge.lookahead_on)
-[g29, t29, p29] = request.security(sym29, "5", scan(), lookahead = barmerge.lookahead_on)
-[g30, t30, p30] = request.security(sym30, "5", scan(), lookahead = barmerge.lookahead_on)
-[g31, t31, p31] = request.security(sym31, "5", scan(), lookahead = barmerge.lookahead_on)
-[g32, t32, p32] = request.security(sym32, "5", scan(), lookahead = barmerge.lookahead_on)
-[g33, t33, p33] = request.security(sym33, "5", scan(), lookahead = barmerge.lookahead_on)
-[g34, t34, p34] = request.security(sym34, "5", scan(), lookahead = barmerge.lookahead_on)
-[g35, t35, p35] = request.security(sym35, "5", scan(), lookahead = barmerge.lookahead_on)
+[g00, t00, p00, x00, lo00, hi00, a00] = request.security(sym00, "5", scan(), lookahead = barmerge.lookahead_on)
+[g01, t01, p01, x01, lo01, hi01, a01] = request.security(sym01, "5", scan(), lookahead = barmerge.lookahead_on)
+[g02, t02, p02, x02, lo02, hi02, a02] = request.security(sym02, "5", scan(), lookahead = barmerge.lookahead_on)
+[g03, t03, p03, x03, lo03, hi03, a03] = request.security(sym03, "5", scan(), lookahead = barmerge.lookahead_on)
+[g04, t04, p04, x04, lo04, hi04, a04] = request.security(sym04, "5", scan(), lookahead = barmerge.lookahead_on)
+[g05, t05, p05, x05, lo05, hi05, a05] = request.security(sym05, "5", scan(), lookahead = barmerge.lookahead_on)
+[g06, t06, p06, x06, lo06, hi06, a06] = request.security(sym06, "5", scan(), lookahead = barmerge.lookahead_on)
+[g07, t07, p07, x07, lo07, hi07, a07] = request.security(sym07, "5", scan(), lookahead = barmerge.lookahead_on)
+[g08, t08, p08, x08, lo08, hi08, a08] = request.security(sym08, "5", scan(), lookahead = barmerge.lookahead_on)
+[g09, t09, p09, x09, lo09, hi09, a09] = request.security(sym09, "5", scan(), lookahead = barmerge.lookahead_on)
+[g10, t10, p10, x10, lo10, hi10, a10] = request.security(sym10, "5", scan(), lookahead = barmerge.lookahead_on)
+[g11, t11, p11, x11, lo11, hi11, a11] = request.security(sym11, "5", scan(), lookahead = barmerge.lookahead_on)
+[g12, t12, p12, x12, lo12, hi12, a12] = request.security(sym12, "5", scan(), lookahead = barmerge.lookahead_on)
+[g13, t13, p13, x13, lo13, hi13, a13] = request.security(sym13, "5", scan(), lookahead = barmerge.lookahead_on)
+[g14, t14, p14, x14, lo14, hi14, a14] = request.security(sym14, "5", scan(), lookahead = barmerge.lookahead_on)
+[g15, t15, p15, x15, lo15, hi15, a15] = request.security(sym15, "5", scan(), lookahead = barmerge.lookahead_on)
+[g16, t16, p16, x16, lo16, hi16, a16] = request.security(sym16, "5", scan(), lookahead = barmerge.lookahead_on)
+[g17, t17, p17, x17, lo17, hi17, a17] = request.security(sym17, "5", scan(), lookahead = barmerge.lookahead_on)
+[g18, t18, p18, x18, lo18, hi18, a18] = request.security(sym18, "5", scan(), lookahead = barmerge.lookahead_on)
+[g19, t19, p19, x19, lo19, hi19, a19] = request.security(sym19, "5", scan(), lookahead = barmerge.lookahead_on)
+[g20, t20, p20, x20, lo20, hi20, a20] = request.security(sym20, "5", scan(), lookahead = barmerge.lookahead_on)
+[g21, t21, p21, x21, lo21, hi21, a21] = request.security(sym21, "5", scan(), lookahead = barmerge.lookahead_on)
+[g22, t22, p22, x22, lo22, hi22, a22] = request.security(sym22, "5", scan(), lookahead = barmerge.lookahead_on)
+[g23, t23, p23, x23, lo23, hi23, a23] = request.security(sym23, "5", scan(), lookahead = barmerge.lookahead_on)
+[g24, t24, p24, x24, lo24, hi24, a24] = request.security(sym24, "5", scan(), lookahead = barmerge.lookahead_on)
+[g25, t25, p25, x25, lo25, hi25, a25] = request.security(sym25, "5", scan(), lookahead = barmerge.lookahead_on)
+[g26, t26, p26, x26, lo26, hi26, a26] = request.security(sym26, "5", scan(), lookahead = barmerge.lookahead_on)
+[g27, t27, p27, x27, lo27, hi27, a27] = request.security(sym27, "5", scan(), lookahead = barmerge.lookahead_on)
+[g28, t28, p28, x28, lo28, hi28, a28] = request.security(sym28, "5", scan(), lookahead = barmerge.lookahead_on)
+[g29, t29, p29, x29, lo29, hi29, a29] = request.security(sym29, "5", scan(), lookahead = barmerge.lookahead_on)
+[g30, t30, p30, x30, lo30, hi30, a30] = request.security(sym30, "5", scan(), lookahead = barmerge.lookahead_on)
+[g31, t31, p31, x31, lo31, hi31, a31] = request.security(sym31, "5", scan(), lookahead = barmerge.lookahead_on)
+[g32, t32, p32, x32, lo32, hi32, a32] = request.security(sym32, "5", scan(), lookahead = barmerge.lookahead_on)
+[g33, t33, p33, x33, lo33, hi33, a33] = request.security(sym33, "5", scan(), lookahead = barmerge.lookahead_on)
+[g34, t34, p34, x34, lo34, hi34, a34] = request.security(sym34, "5", scan(), lookahead = barmerge.lookahead_on)
+[g35, t35, p35, x35, lo35, hi35, a35] = request.security(sym35, "5", scan(), lookahead = barmerge.lookahead_on)
 
 var array<string> names = array.new<string>(36, "")
-var array<int> lastDir = array.new<int>(36, 0)
-var array<int> lastBar = array.new<int>(36, -100000)
+var array<int> dirA = array.new<int>(36, 0)          // open position: 1 AL, -1 SAT, 0 none
+var array<float> entA = array.new<float>(36, na)
+var array<float> stopA = array.new<float>(36, na)
+var array<int> barsA = array.new<int>(36, 0)
 var array<float> lastPx = array.new<float>(36, na)
 var array<float> lastT = array.new<float>(36, na)
-upd(int i, string sym, float g, float t, float p) =>
+var array<int> exitBar = array.new<int>(36, -100000)
+var array<float> exitNet = array.new<float>(36, na)
+var array<int> entBar = array.new<int>(36, -100000)
+upd(int i, string sym, float g, float t, float p, float x, float lo, float hi, float a) =>
     string nm = str.replace(str.replace(sym, "BINANCE:", ""), ".P", "")
     array.set(names, i, nm)
     string res = ""
-    // a new closed 5m candle of that coin (dedupe when a coin has no fresh candle)
     float prevT = array.get(lastT, i)
+    // one decision per NEW closed 5m candle of that coin (same order as the bot: stop, CIK, time, then entry)
     if not na(t) and (na(prevT) or t != prevT)
         array.set(lastT, i, t)
-        int d = g > 0 and i_long ? 1 : g < 0 and i_short ? -1 : 0
+        array.set(lastPx, i, p)
+        int d = array.get(dirA, i)
         if d != 0
-            array.set(lastDir, i, d)
-            array.set(lastBar, i, bar_index)
-            array.set(lastPx, i, p)
-            res := (d > 0 ? "L:" : "S:") + nm
+            array.set(barsA, i, array.get(barsA, i) + 1)
+            float en = array.get(entA, i)
+            float st = array.get(stopA, i)
+            float px = na
+            if d > 0 and lo <= st
+                px := st
+            else if d < 0 and hi >= st
+                px := st
+            else if d > 0 and i_useX and x > 0
+                px := p
+            else if array.get(barsA, i) >= i_H
+                px := p
+            if not na(px)
+                float net = d * (px / en - 1.0) - 0.0014
+                array.set(dirA, i, 0)
+                array.set(exitBar, i, bar_index)
+                array.set(exitNet, i, net)
+                res += "X:" + nm + " (" + str.tostring(net * 100, "#.##") + "%),"
+        if array.get(dirA, i) == 0 and g != 0
+            int nd = g > 0 ? 1 : -1
+            float stp = nd > 0 ? p * (1 - i_em / 100) : p * (1 + i_em / 100)
+            if i_sl > 0 and not na(a)
+                stp := nd > 0 ? math.max(stp, p - i_sl * a) : math.min(stp, p + i_sl * a)
+            array.set(dirA, i, nd)
+            array.set(entA, i, p)
+            array.set(stopA, i, stp)
+            array.set(barsA, i, 0)
+            array.set(entBar, i, bar_index)
+            res += (nd > 0 ? "L:" : "S:") + nm + ","
     res
 
-r00 = upd(0, sym00, g00, t00, p00)
-r01 = upd(1, sym01, g01, t01, p01)
-r02 = upd(2, sym02, g02, t02, p02)
-r03 = upd(3, sym03, g03, t03, p03)
-r04 = upd(4, sym04, g04, t04, p04)
-r05 = upd(5, sym05, g05, t05, p05)
-r06 = upd(6, sym06, g06, t06, p06)
-r07 = upd(7, sym07, g07, t07, p07)
-r08 = upd(8, sym08, g08, t08, p08)
-r09 = upd(9, sym09, g09, t09, p09)
-r10 = upd(10, sym10, g10, t10, p10)
-r11 = upd(11, sym11, g11, t11, p11)
-r12 = upd(12, sym12, g12, t12, p12)
-r13 = upd(13, sym13, g13, t13, p13)
-r14 = upd(14, sym14, g14, t14, p14)
-r15 = upd(15, sym15, g15, t15, p15)
-r16 = upd(16, sym16, g16, t16, p16)
-r17 = upd(17, sym17, g17, t17, p17)
-r18 = upd(18, sym18, g18, t18, p18)
-r19 = upd(19, sym19, g19, t19, p19)
-r20 = upd(20, sym20, g20, t20, p20)
-r21 = upd(21, sym21, g21, t21, p21)
-r22 = upd(22, sym22, g22, t22, p22)
-r23 = upd(23, sym23, g23, t23, p23)
-r24 = upd(24, sym24, g24, t24, p24)
-r25 = upd(25, sym25, g25, t25, p25)
-r26 = upd(26, sym26, g26, t26, p26)
-r27 = upd(27, sym27, g27, t27, p27)
-r28 = upd(28, sym28, g28, t28, p28)
-r29 = upd(29, sym29, g29, t29, p29)
-r30 = upd(30, sym30, g30, t30, p30)
-r31 = upd(31, sym31, g31, t31, p31)
-r32 = upd(32, sym32, g32, t32, p32)
-r33 = upd(33, sym33, g33, t33, p33)
-r34 = upd(34, sym34, g34, t34, p34)
-r35 = upd(35, sym35, g35, t35, p35)
-string fired = r00 + "," + r01 + "," + r02 + "," + r03 + "," + r04 + "," + r05 + "," + r06 + "," + r07 + "," + r08 + "," + r09 + "," + r10 + "," + r11 + "," + r12 + "," + r13 + "," + r14 + "," + r15 + "," + r16 + "," + r17 + "," + r18 + "," + r19 + "," + r20 + "," + r21 + "," + r22 + "," + r23 + "," + r24 + "," + r25 + "," + r26 + "," + r27 + "," + r28 + "," + r29 + "," + r30 + "," + r31 + "," + r32 + "," + r33 + "," + r34 + "," + r35
+r00 = upd(0, sym00, g00, t00, p00, x00, lo00, hi00, a00)
+r01 = upd(1, sym01, g01, t01, p01, x01, lo01, hi01, a01)
+r02 = upd(2, sym02, g02, t02, p02, x02, lo02, hi02, a02)
+r03 = upd(3, sym03, g03, t03, p03, x03, lo03, hi03, a03)
+r04 = upd(4, sym04, g04, t04, p04, x04, lo04, hi04, a04)
+r05 = upd(5, sym05, g05, t05, p05, x05, lo05, hi05, a05)
+r06 = upd(6, sym06, g06, t06, p06, x06, lo06, hi06, a06)
+r07 = upd(7, sym07, g07, t07, p07, x07, lo07, hi07, a07)
+r08 = upd(8, sym08, g08, t08, p08, x08, lo08, hi08, a08)
+r09 = upd(9, sym09, g09, t09, p09, x09, lo09, hi09, a09)
+r10 = upd(10, sym10, g10, t10, p10, x10, lo10, hi10, a10)
+r11 = upd(11, sym11, g11, t11, p11, x11, lo11, hi11, a11)
+r12 = upd(12, sym12, g12, t12, p12, x12, lo12, hi12, a12)
+r13 = upd(13, sym13, g13, t13, p13, x13, lo13, hi13, a13)
+r14 = upd(14, sym14, g14, t14, p14, x14, lo14, hi14, a14)
+r15 = upd(15, sym15, g15, t15, p15, x15, lo15, hi15, a15)
+r16 = upd(16, sym16, g16, t16, p16, x16, lo16, hi16, a16)
+r17 = upd(17, sym17, g17, t17, p17, x17, lo17, hi17, a17)
+r18 = upd(18, sym18, g18, t18, p18, x18, lo18, hi18, a18)
+r19 = upd(19, sym19, g19, t19, p19, x19, lo19, hi19, a19)
+r20 = upd(20, sym20, g20, t20, p20, x20, lo20, hi20, a20)
+r21 = upd(21, sym21, g21, t21, p21, x21, lo21, hi21, a21)
+r22 = upd(22, sym22, g22, t22, p22, x22, lo22, hi22, a22)
+r23 = upd(23, sym23, g23, t23, p23, x23, lo23, hi23, a23)
+r24 = upd(24, sym24, g24, t24, p24, x24, lo24, hi24, a24)
+r25 = upd(25, sym25, g25, t25, p25, x25, lo25, hi25, a25)
+r26 = upd(26, sym26, g26, t26, p26, x26, lo26, hi26, a26)
+r27 = upd(27, sym27, g27, t27, p27, x27, lo27, hi27, a27)
+r28 = upd(28, sym28, g28, t28, p28, x28, lo28, hi28, a28)
+r29 = upd(29, sym29, g29, t29, p29, x29, lo29, hi29, a29)
+r30 = upd(30, sym30, g30, t30, p30, x30, lo30, hi30, a30)
+r31 = upd(31, sym31, g31, t31, p31, x31, lo31, hi31, a31)
+r32 = upd(32, sym32, g32, t32, p32, x32, lo32, hi32, a32)
+r33 = upd(33, sym33, g33, t33, p33, x33, lo33, hi33, a33)
+r34 = upd(34, sym34, g34, t34, p34, x34, lo34, hi34, a34)
+r35 = upd(35, sym35, g35, t35, p35, x35, lo35, hi35, a35)
+string fired = r00 + r01 + r02 + r03 + r04 + r05 + r06 + r07 + r08 + r09 + r10 + r11 + r12 + r13 + r14 + r15 + r16 + r17 + r18 + r19 + r20 + r21 + r22 + r23 + r24 + r25 + r26 + r27 + r28 + r29 + r30 + r31 + r32 + r33 + r34 + r35
 
 // ---------------------------------------------------------------- alert + table
 string alL = ""
 string alS = ""
+string alX = ""
 for part in str.split(fired, ",")
     if str.startswith(part, "L:")
         alL += (alL == "" ? "" : ", ") + str.substring(part, 2)
     else if str.startswith(part, "S:")
         alS += (alS == "" ? "" : ", ") + str.substring(part, 2)
-bool anyNew = alL != "" or alS != ""
+    else if str.startswith(part, "X:")
+        alX += (alX == "" ? "" : ", ") + str.substring(part, 2)
+bool anyNew = alL != "" or alS != "" or alX != ""
 if anyNew and barstate.isrealtime
-    alert("TSA 5m" + (alL != "" ? " | AL: " + alL : "") + (alS != "" ? " | SAT: " + alS : ""), alert.freq_once_per_bar)
-alertcondition(anyNew, "TSA tarayici: yeni sinyal", "TSA 5m tarayici yeni AL/SAT sinyali verdi")
+    alert("TSA 5m" + (alL != "" ? " | AL: " + alL : "") + (alS != "" ? " | SAT: " + alS : "") + (alX != "" ? " | ÇIK: " + alX : ""), alert.freq_once_per_bar)
+alertcondition(alL != "" or alS != "", "TSA tarayici: yeni AL/SAT", "TSA 5m tarayici yeni AL/SAT sinyali verdi")
+alertcondition(alX != "", "TSA tarayici: CIK (kar al)", "TSA 5m tarayici: bir AL pozisyonu icin CIK zamani")
 plotshape(alL != "", "Yeni AL", shape.triangleup, location.bottom, color.teal, display = display.data_window)
-plotshape(alS != "", "Yeni SAT", shape.triangledown, location.top, color.maroon, display = display.data_window)
+plotshape(alX != "", "Yeni CIK", shape.xcross, location.top, color.orange, display = display.data_window)
 
 posOf(string p) =>
     p == "Sag Ust" ? position.top_right : p == "Sag Alt" ? position.bottom_right : p == "Sol Ust" ? position.top_left : position.bottom_left
-var table T = table.new(posOf(i_pos), 4, 38, border_width = 1)
+var table T = table.new(posOf(i_pos), 5, 38, border_width = 1)
 if barstate.islast
-    table.clear(T, 0, 0, 3, 37)
+    table.clear(T, 0, 0, 4, 37)
     table.cell(T, 0, 0, "Coin", bgcolor = color.gray, text_color = color.white, text_size = size.small)
-    table.cell(T, 1, 0, "Sinyal", bgcolor = color.gray, text_color = color.white, text_size = size.small)
-    table.cell(T, 2, 0, "Kac mum once", bgcolor = color.gray, text_color = color.white, text_size = size.small)
-    table.cell(T, 3, 0, "Fiyat", bgcolor = color.gray, text_color = color.white, text_size = size.small)
+    table.cell(T, 1, 0, "Durum", bgcolor = color.gray, text_color = color.white, text_size = size.small)
+    table.cell(T, 2, 0, "Mum", bgcolor = color.gray, text_color = color.white, text_size = size.small)
+    table.cell(T, 3, 0, "Giris", bgcolor = color.gray, text_color = color.white, text_size = size.small)
+    table.cell(T, 4, 0, "K/Z %", bgcolor = color.gray, text_color = color.white, text_size = size.small)
     int row = 1
     int nAct = 0
     for i = 0 to 35
-        int d = array.get(lastDir, i)
-        int ago = bar_index - array.get(lastBar, i)
-        bool act = d != 0 and ago < (d > 0 ? i_holdL : i_holdS)
-        nAct += act ? 1 : 0
-        if act or not i_onlyActive
-            color bg = act ? (d > 0 ? color.teal : color.maroon) : color.new(color.black, 20)
+        int d = array.get(dirA, i)
+        int sinceX = bar_index - array.get(exitBar, i)
+        bool xNew = d == 0 and sinceX < i_exitKeep
+        nAct += d != 0 ? 1 : 0
+        if d != 0 or xNew or not i_onlyActive
+            float en = array.get(entA, i)
+            float kz = d != 0 ? d * (array.get(lastPx, i) / en - 1.0) * 100 : xNew ? array.get(exitNet, i) * 100 : float(na)
+            string st = d > 0 ? "AL" : d < 0 ? "SAT" : xNew ? "ÇIK" : "-"
+            color bg = d > 0 ? color.teal : d < 0 ? color.maroon : xNew ? color.orange : color.new(color.black, 20)
             table.cell(T, 0, row, array.get(names, i), text_color = color.white, bgcolor = color.new(color.black, 20), text_size = size.small)
-            table.cell(T, 1, row, act ? (d > 0 ? "AL" : "SAT") : "-", text_color = color.white, bgcolor = bg, text_size = size.small)
-            table.cell(T, 2, row, d != 0 and ago < 5000 ? str.tostring(ago) : "-", text_color = color.white, bgcolor = color.new(color.black, 20), text_size = size.small)
-            table.cell(T, 3, row, na(array.get(lastPx, i)) or not act ? "" : str.tostring(array.get(lastPx, i), format.mintick), text_color = color.white, bgcolor = color.new(color.black, 20), text_size = size.small)
+            table.cell(T, 1, row, st, text_color = color.white, bgcolor = bg, text_size = size.small)
+            table.cell(T, 2, row, d != 0 ? str.tostring(array.get(barsA, i)) : xNew ? str.tostring(sinceX) : "", text_color = color.white, bgcolor = color.new(color.black, 20), text_size = size.small)
+            table.cell(T, 3, row, d != 0 ? str.tostring(en, format.mintick) : "", text_color = color.white, bgcolor = color.new(color.black, 20), text_size = size.small)
+            table.cell(T, 4, row, na(kz) ? "" : str.tostring(kz, "#.##"), text_color = color.white, bgcolor = na(kz) ? color.new(color.black, 20) : kz >= 0 ? color.new(color.green, 40) : color.new(color.red, 40), text_size = size.small)
             row += 1
-    table.cell(T, 0, row, timeframe.period == "5" ? str.tostring(nAct) + " aktif sinyal" : "5 dk grafik kullanin!", text_color = color.white, bgcolor = timeframe.period == "5" ? color.navy : color.orange, text_size = size.small)
+    table.cell(T, 0, row, timeframe.period == "5" ? str.tostring(nAct) + " acik AL" : "5 dk grafik kullanin!", text_color = color.white, bgcolor = timeframe.period == "5" ? color.navy : color.orange, text_size = size.small)

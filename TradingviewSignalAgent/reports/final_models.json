@@ -2185,10 +2185,10 @@
   "5m": {
    "tf": "5m",
    "family": "rules",
-   "config": "rules:top1",
-   "H": 24,
+   "config": "rules:top1+exit:wt>=50,sl3atr,h96",
+   "H": 96,
    "tp_atr": null,
-   "sl_atr": null,
+   "sl_atr": 3.0,
    "q": null,
    "rules": {
     "1": [
@@ -2211,6 +2211,22 @@
      ]
     ],
     "-1": []
+   },
+   "emergency_stop": 0.08,
+   "exit_rules": [
+    [
+     [
+      "wt",
+      ">=",
+      1.0
+     ]
+    ]
+   ],
+   "stats_override": {
+    "dir_hit": 0.622,
+    "win_rate": 0.6298,
+    "trades": 543,
+    "avg_net": 0.004244
    }
   },
   "15m": {

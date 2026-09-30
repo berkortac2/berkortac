@@ -32,6 +32,8 @@ def main():
         d = pd.read_csv(ROOT / "reports" / "deep5m_final_results.csv")
         r = d[(d.group == "search12") & (d.model == m5["config"].split(":")[1]) & (d.fee == "futures_taker")].iloc[0]
         stats["5m"] = {"dir_hit": r.dir_hit, "win_rate": r.win_rate, "trades": r.trades, "avg_net": r.avg_net}
+    if "stats_override" in m5:   # 5m with the validated exit policy (reports/exit_study_5m_summary.csv)
+        stats["5m"] = m5["stats_override"]
     label = FAMILY_TR.get(fam, fam)
     out = ROOT / "pine"
     out.mkdir(exist_ok=True)

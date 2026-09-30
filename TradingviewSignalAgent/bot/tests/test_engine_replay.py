@@ -96,3 +96,46 @@ def test_budget_never_exceeded(tmp_path):
         await eng.task
     asyncio.run(go())
     assert max(peak) <= 50 + 1e-6 and max(peak) > 0
+
+
+def test_engine_exit_rule_matches_research(tmp_path):
+    """Indicator exit ("ÇIK") + ATR stop + emergency stop: engine == scripts/17 simulator."""
+    import importlib.util
+    raw = tsabot.REPO_ROOT / "data" / "raw"
+    if not (raw / f"{SYM}_5m.parquet").exists():
+        pytest.skip("research data not downloaded")
+    spec = importlib.util.spec_from_file_location("exit_study", tsabot.REPO_ROOT / "scripts" / "17_exit_study.py")
+    es = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(es)
+    model = {"long": {"rules": [[["rsi7", "<=", -0.35]]], "H": 24, "tp_atr": None, "sl_atr": 3.0,
+                      "exit_rules": [[["wt", ">=", 0.5]]]}, "short": {"rules": [], "H": 24}}
+    d5 = pd.read_parquet(raw / f"{SYM}_5m.parquet")
+    d1 = pd.read_parquet(raw / f"{SYM}_1h.parquet")
+    start = int(d5.open_time.iloc[-5000])
+    s = Settings(mode="replay", symbols=[SYM], budget_usdt=1000, max_positions=1, leverage=1,
+                 daily_loss_limit_pct=100, max_drawdown_pct=100, replay_speed=0, emergency_stop_pct=8.0)
+    eng = Engine(s, Strategy(model), ReplayMarket([SYM], start_ms=start, speed_s=0, bars=BARS), PaperBroker(),
+                 Store(tmp_path / "x.db"))
+
+    async def go():
+        await eng.start()
+        await eng.task
+    asyncio.run(go())
+    got = pd.DataFrame(eng.store.trades("replay", 10_000)).sort_values("entry_time")
+    assert len(got) > 5 and (got.reason == "ÇIK sinyali (kâr al)").any()
+
+    f = compute_features(d5, "5m", d1)
+    atr = ta.atr(d5.high.to_numpy(), d5.low.to_numpy(), d5.close.to_numpy(), 14)
+    t = d5.open_time.to_numpy()
+    win = (t >= start) & (t < start + (BARS - 30) * 300_000)
+    sig = (f["rsi7"].to_numpy() <= -0.35) & win
+    F = np.ascontiguousarray(f[es.EXIT_FEATS].fillna(0).to_numpy(np.float64))
+    o, h, l, c = (d5[k].to_numpy() for k in ("open", "high", "low", "close"))
+    nets, bars, why = es.sim(o, h, l, c, atr, sig, F, np.array([0]), np.array([len(d5)]), 24, 0.0, 3.0, 0.08,
+                             0.0, 0.0, es.EXIT_FEATS.index("wt"), 0.5, 0.0014)
+    got["ret"] = got.pnl / (got.qty * got.entry_price)
+    g = got[got.entry_time < start + (BARS - 60) * 300_000]
+    n_ref = len(nets[:len(g) + 5])
+    assert abs(len(g) - min(n_ref, len(g))) <= max(2, 0.05 * len(g))
+    k = min(len(g), len(nets))
+    assert np.median(np.abs(g.ret.to_numpy()[:k] - nets[:k])) < 1e-3

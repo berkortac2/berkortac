@@ -160,23 +160,28 @@ def _rules_expr(rules, var_of):
 
 def generate_scanner(model: dict, coins: list[str] | None = None, title: str = "TSA 5m Coin Tarayici") -> str:
     coins = (coins or DEFAULT_COINS)[:39]
-    lr, sr = model["long"]["rules"], model["short"]["rules"]
-    feats = sorted({c[0] for r in lr + sr for c in r})
+    n = len(coins)
+    L_, S_ = model["long"], model.get("short", {"rules": []})
+    lr, sr, xr = L_["rules"], S_.get("rules", []), L_.get("exit_rules", [])
+    feats = sorted({c[0] for r in lr + sr + xr for c in r})
     block, var_of = feature_block([f for f in feats if f not in HTF_FEATURES])
     uses_htf = any(f in HTF_FEATURES for f in feats)
     htf_lines = ""
     if uses_htf:
         htf_lines = "    [hA, hB, hC, hD] = hourlyCtx()\n" + "".join(
-            f"    float x_{n} = nz({v})\n" for n, v in zip(HTF_FEATURES, ("hA", "hB", "hC", "hD")))
-        for n in HTF_FEATURES:
-            var_of[n] = f"x_{n}"
-    HL, HS = int(model["long"]["H"]), int(model["short"].get("H", model["long"]["H"]))
+            f"    float x_{nm} = nz({v})\n" for nm, v in zip(HTF_FEATURES, ("hA", "hB", "hC", "hD")))
+        for nm in HTF_FEATURES:
+            var_of[nm] = f"x_{nm}"
+    H = int(L_["H"])
+    sl = float(L_.get("sl_atr") or 0.0)
+    em = float(model.get("emergency_stop", 0.08))
     stats = model.get("stats_line", "")
     out = [f"""//@version=6
-// {title} - Tradingview Signal Agent. 36 Binance USDT-M perpetual coins on 5 minutes.
-// Signal on the CLOSE of a 5m candle (no repaint): the table shows which coins gave AL (long) / SAT (short),
-// one alert names every coin that just signalled. Use it on a 5 minute chart (any symbol).
-// Rules and parameters come from the replayed walk-forward research (see reports/SONUCLAR.md). {stats}
+// {title} - Tradingview Signal Agent. {n} Binance USDT-M perpetual coins on 5 minutes.
+// AL = long entry on the CLOSE of a 5m candle (no repaint). The scanner then follows each AL position like the
+// bot does and shows CIK (take profit / exit) when WaveTrend reaches overbought, the stop is hit
+// ({sl:g} x ATR or {em * 100:g}%) or {H} candles have passed. One alert lists every coin that just gave AL or CIK.
+// Rules/parameters: replayed walk-forward research (reports/SONUCLAR_5DK_BOT.md). {stats}
 // Not investment advice.
 indicator("{title}", shorttitle = "TSA Scan 5m", overlay = true, calc_bars_count = 6000)
 """, HELPERS, HOURLY_FUNC if uses_htf else "", f"""
@@ -185,88 +190,131 @@ scan() =>
 {block}
 {htf_lines}    bool L = {_rules_expr(lr, var_of)}
     bool S = {_rules_expr(sr, var_of)}
+    bool X = {_rules_expr(xr, var_of)}
     float sig = L ? 1.0 : S ? -1.0 : 0.0
+    float xf = X ? 1.0 : 0.0
     // previous (closed) candle + lookahead_on in the caller = no repaint
-    [sig[1], float(time[1]), close[1]]
+    [sig[1], float(time[1]), close[1], xf[1], low[1], high[1], atr14[1]]
 
 grp = "Coinler (Binance USDT-M perpetual, en fazla 39)"
-i_holdL = input.int({HL}, "AL sinyali tabloda kac mum kalsin", minval = 1, group = "Tablo")
-i_holdS = input.int({HS}, "SAT sinyali tabloda kac mum kalsin", minval = 1, group = "Tablo")
-i_onlyActive = input.bool(false, "Tabloda sadece aktif sinyalleri goster", group = "Tablo")
+i_exitKeep = input.int(12, "CIK tabloda kac mum kalsin", minval = 1, group = "Tablo")
+i_onlyActive = input.bool(false, "Tabloda sadece aktif AL / yeni CIK goster", group = "Tablo")
 i_pos = input.string("Sag Ust", "Tablo konumu", options = ["Sag Ust", "Sag Alt", "Sol Ust", "Sol Alt"], group = "Tablo")
-i_long = input.bool(true, "AL (long) sinyalleri", group = "Sinyal")
-i_short = input.bool(true, "SAT (short) sinyalleri", group = "Sinyal")
+i_H = input.int({H}, "En uzun tutma (mum)", minval = 1, group = "Cikis")
+i_sl = input.float({sl}, "Zarar kes (x ATR, 0 = yok)", minval = 0, step = 0.5, group = "Cikis")
+i_em = input.float({em * 100:g}, "Acil stop (%)", minval = 0, step = 0.5, group = "Cikis")
+i_useX = input.bool(true, "CIK sinyali (WaveTrend asiri alim) ile kar al", group = "Cikis")
 """]
     for i, c in enumerate(coins):
         out.append(f'sym{i:02d} = input.symbol("BINANCE:{c}.P", "{i + 1}", group = grp, inline = "c{i // 3}")')
     out.append("")
-    for i in range(len(coins)):
-        out.append(f"[g{i:02d}, t{i:02d}, p{i:02d}] = request.security(sym{i:02d}, \"5\", scan(), "
-                   f"lookahead = barmerge.lookahead_on)")
+    for i in range(n):
+        out.append(f"[g{i:02d}, t{i:02d}, p{i:02d}, x{i:02d}, lo{i:02d}, hi{i:02d}, a{i:02d}] = request.security("
+                   f"sym{i:02d}, \"5\", scan(), lookahead = barmerge.lookahead_on)")
     out.append(f"""
-var array<string> names = array.new<string>({len(coins)}, "")
-var array<int> lastDir = array.new<int>({len(coins)}, 0)
-var array<int> lastBar = array.new<int>({len(coins)}, -100000)
-var array<float> lastPx = array.new<float>({len(coins)}, na)
-var array<float> lastT = array.new<float>({len(coins)}, na)
-upd(int i, string sym, float g, float t, float p) =>
+var array<string> names = array.new<string>({n}, "")
+var array<int> dirA = array.new<int>({n}, 0)          // open position: 1 AL, -1 SAT, 0 none
+var array<float> entA = array.new<float>({n}, na)
+var array<float> stopA = array.new<float>({n}, na)
+var array<int> barsA = array.new<int>({n}, 0)
+var array<float> lastPx = array.new<float>({n}, na)
+var array<float> lastT = array.new<float>({n}, na)
+var array<int> exitBar = array.new<int>({n}, -100000)
+var array<float> exitNet = array.new<float>({n}, na)
+var array<int> entBar = array.new<int>({n}, -100000)
+upd(int i, string sym, float g, float t, float p, float x, float lo, float hi, float a) =>
     string nm = str.replace(str.replace(sym, "BINANCE:", ""), ".P", "")
     array.set(names, i, nm)
     string res = ""
-    // a new closed 5m candle of that coin (dedupe when a coin has no fresh candle)
     float prevT = array.get(lastT, i)
+    // one decision per NEW closed 5m candle of that coin (same order as the bot: stop, CIK, time, then entry)
     if not na(t) and (na(prevT) or t != prevT)
         array.set(lastT, i, t)
-        int d = g > 0 and i_long ? 1 : g < 0 and i_short ? -1 : 0
+        array.set(lastPx, i, p)
+        int d = array.get(dirA, i)
         if d != 0
-            array.set(lastDir, i, d)
-            array.set(lastBar, i, bar_index)
-            array.set(lastPx, i, p)
-            res := (d > 0 ? "L:" : "S:") + nm
+            array.set(barsA, i, array.get(barsA, i) + 1)
+            float en = array.get(entA, i)
+            float st = array.get(stopA, i)
+            float px = na
+            if d > 0 and lo <= st
+                px := st
+            else if d < 0 and hi >= st
+                px := st
+            else if d > 0 and i_useX and x > 0
+                px := p
+            else if array.get(barsA, i) >= i_H
+                px := p
+            if not na(px)
+                float net = d * (px / en - 1.0) - 0.0014
+                array.set(dirA, i, 0)
+                array.set(exitBar, i, bar_index)
+                array.set(exitNet, i, net)
+                res += "X:" + nm + " (" + str.tostring(net * 100, "#.##") + "%),"
+        if array.get(dirA, i) == 0 and g != 0
+            int nd = g > 0 ? 1 : -1
+            float stp = nd > 0 ? p * (1 - i_em / 100) : p * (1 + i_em / 100)
+            if i_sl > 0 and not na(a)
+                stp := nd > 0 ? math.max(stp, p - i_sl * a) : math.min(stp, p + i_sl * a)
+            array.set(dirA, i, nd)
+            array.set(entA, i, p)
+            array.set(stopA, i, stp)
+            array.set(barsA, i, 0)
+            array.set(entBar, i, bar_index)
+            res += (nd > 0 ? "L:" : "S:") + nm + ","
     res
 """)
-    for i in range(len(coins)):
-        out.append(f"r{i:02d} = upd({i}, sym{i:02d}, g{i:02d}, t{i:02d}, p{i:02d})")
-    out.append("string fired = " + " + \",\" + ".join(f"r{i:02d}" for i in range(len(coins))))
+    for i in range(n):
+        out.append(f"r{i:02d} = upd({i}, sym{i:02d}, g{i:02d}, t{i:02d}, p{i:02d}, x{i:02d}, lo{i:02d}, hi{i:02d}, a{i:02d})")
+    out.append("string fired = " + " + ".join(f"r{i:02d}" for i in range(n)))
     out.append(f"""
 // ---------------------------------------------------------------- alert + table
 string alL = ""
 string alS = ""
+string alX = ""
 for part in str.split(fired, ",")
     if str.startswith(part, "L:")
         alL += (alL == "" ? "" : ", ") + str.substring(part, 2)
     else if str.startswith(part, "S:")
         alS += (alS == "" ? "" : ", ") + str.substring(part, 2)
-bool anyNew = alL != "" or alS != ""
+    else if str.startswith(part, "X:")
+        alX += (alX == "" ? "" : ", ") + str.substring(part, 2)
+bool anyNew = alL != "" or alS != "" or alX != ""
 if anyNew and barstate.isrealtime
-    alert("TSA 5m" + (alL != "" ? " | AL: " + alL : "") + (alS != "" ? " | SAT: " + alS : ""), alert.freq_once_per_bar)
-alertcondition(anyNew, "TSA tarayici: yeni sinyal", "TSA 5m tarayici yeni AL/SAT sinyali verdi")
+    alert("TSA 5m" + (alL != "" ? " | AL: " + alL : "") + (alS != "" ? " | SAT: " + alS : "") + (alX != "" ? " | ÇIK: " + alX : ""), alert.freq_once_per_bar)
+alertcondition(alL != "" or alS != "", "TSA tarayici: yeni AL/SAT", "TSA 5m tarayici yeni AL/SAT sinyali verdi")
+alertcondition(alX != "", "TSA tarayici: CIK (kar al)", "TSA 5m tarayici: bir AL pozisyonu icin CIK zamani")
 plotshape(alL != "", "Yeni AL", shape.triangleup, location.bottom, color.teal, display = display.data_window)
-plotshape(alS != "", "Yeni SAT", shape.triangledown, location.top, color.maroon, display = display.data_window)
+plotshape(alX != "", "Yeni CIK", shape.xcross, location.top, color.orange, display = display.data_window)
 
 posOf(string p) =>
     p == "Sag Ust" ? position.top_right : p == "Sag Alt" ? position.bottom_right : p == "Sol Ust" ? position.top_left : position.bottom_left
-var table T = table.new(posOf(i_pos), 4, {len(coins) + 2}, border_width = 1)
+var table T = table.new(posOf(i_pos), 5, {n + 2}, border_width = 1)
 if barstate.islast
-    table.clear(T, 0, 0, 3, {len(coins) + 1})
+    table.clear(T, 0, 0, 4, {n + 1})
     table.cell(T, 0, 0, "Coin", bgcolor = color.gray, text_color = color.white, text_size = size.small)
-    table.cell(T, 1, 0, "Sinyal", bgcolor = color.gray, text_color = color.white, text_size = size.small)
-    table.cell(T, 2, 0, "Kac mum once", bgcolor = color.gray, text_color = color.white, text_size = size.small)
-    table.cell(T, 3, 0, "Fiyat", bgcolor = color.gray, text_color = color.white, text_size = size.small)
+    table.cell(T, 1, 0, "Durum", bgcolor = color.gray, text_color = color.white, text_size = size.small)
+    table.cell(T, 2, 0, "Mum", bgcolor = color.gray, text_color = color.white, text_size = size.small)
+    table.cell(T, 3, 0, "Giris", bgcolor = color.gray, text_color = color.white, text_size = size.small)
+    table.cell(T, 4, 0, "K/Z %", bgcolor = color.gray, text_color = color.white, text_size = size.small)
     int row = 1
     int nAct = 0
-    for i = 0 to {len(coins) - 1}
-        int d = array.get(lastDir, i)
-        int ago = bar_index - array.get(lastBar, i)
-        bool act = d != 0 and ago < (d > 0 ? i_holdL : i_holdS)
-        nAct += act ? 1 : 0
-        if act or not i_onlyActive
-            color bg = act ? (d > 0 ? color.teal : color.maroon) : color.new(color.black, 20)
+    for i = 0 to {n - 1}
+        int d = array.get(dirA, i)
+        int sinceX = bar_index - array.get(exitBar, i)
+        bool xNew = d == 0 and sinceX < i_exitKeep
+        nAct += d != 0 ? 1 : 0
+        if d != 0 or xNew or not i_onlyActive
+            float en = array.get(entA, i)
+            float kz = d != 0 ? d * (array.get(lastPx, i) / en - 1.0) * 100 : xNew ? array.get(exitNet, i) * 100 : float(na)
+            string st = d > 0 ? "AL" : d < 0 ? "SAT" : xNew ? "ÇIK" : "-"
+            color bg = d > 0 ? color.teal : d < 0 ? color.maroon : xNew ? color.orange : color.new(color.black, 20)
             table.cell(T, 0, row, array.get(names, i), text_color = color.white, bgcolor = color.new(color.black, 20), text_size = size.small)
-            table.cell(T, 1, row, act ? (d > 0 ? "AL" : "SAT") : "-", text_color = color.white, bgcolor = bg, text_size = size.small)
-            table.cell(T, 2, row, d != 0 and ago < 5000 ? str.tostring(ago) : "-", text_color = color.white, bgcolor = color.new(color.black, 20), text_size = size.small)
-            table.cell(T, 3, row, na(array.get(lastPx, i)) or not act ? "" : str.tostring(array.get(lastPx, i), format.mintick), text_color = color.white, bgcolor = color.new(color.black, 20), text_size = size.small)
+            table.cell(T, 1, row, st, text_color = color.white, bgcolor = bg, text_size = size.small)
+            table.cell(T, 2, row, d != 0 ? str.tostring(array.get(barsA, i)) : xNew ? str.tostring(sinceX) : "", text_color = color.white, bgcolor = color.new(color.black, 20), text_size = size.small)
+            table.cell(T, 3, row, d != 0 ? str.tostring(en, format.mintick) : "", text_color = color.white, bgcolor = color.new(color.black, 20), text_size = size.small)
+            table.cell(T, 4, row, na(kz) ? "" : str.tostring(kz, "#.##"), text_color = color.white, bgcolor = na(kz) ? color.new(color.black, 20) : kz >= 0 ? color.new(color.green, 40) : color.new(color.red, 40), text_size = size.small)
             row += 1
-    table.cell(T, 0, row, timeframe.period == "5" ? str.tostring(nAct) + " aktif sinyal" : "5 dk grafik kullanin!", text_color = color.white, bgcolor = timeframe.period == "5" ? color.navy : color.orange, text_size = size.small)
+    table.cell(T, 0, row, timeframe.period == "5" ? str.tostring(nAct) + " acik AL" : "5 dk grafik kullanin!", text_color = color.white, bgcolor = timeframe.period == "5" ? color.navy : color.orange, text_size = size.small)
 """)
     return "\n".join(out)
