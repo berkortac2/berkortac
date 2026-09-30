@@ -460,6 +460,8 @@ def create_app(data_dir: Path = DATA_DIR, model_path: Path = MODEL_PATH, factori
 
     @app.get("/api/model")
     async def model(s: dict = Depends(session)):
-        return Strategy.load(st.model_path).describe() if st.model_path.exists() else {}
+        if not st.model_path.exists():
+            return {}
+        return {**Strategy.load(st.model_path).describe(), "emergency_stop_pct": st.settings.emergency_stop_pct}
 
     return app

@@ -125,7 +125,7 @@ function stopOf(p) {
 function renderPositions(el, ps) {
   table(el, [["Parite", (p) => p.symbol], ["Yön", (p) => dirTag(p.direction)], ["Miktar", (p) => fpx(p.qty)],
     ["Giriş", (p) => fpx(p.entry_price)], ["Son", (p) => fpx(p.last_price)], ["TP", (p) => fpx(p.tp)],
-    ["Stop", (p) => fpx(stopOf(p))], ["Mum", (p) => p.bars_held + " / " + p.H], ["Marjin", (p) => fmt(p.margin)],
+    ["Acil stop", (p) => fpx(p.emergency)], ["Stop (borsada)", (p) => fpx(stopOf(p)) + (p.protected === false ? " ⚠" : "")], ["Mum", (p) => p.bars_held + " / " + p.H], ["Marjin", (p) => fmt(p.margin)],
     ["K/Z", (p) => money(p.unrealized), (p) => cls(p.unrealized)]], ps, "Açık pozisyon yok");
 }
 function renderTrades(ts) {
@@ -230,7 +230,8 @@ async function loadModel() {
     for (const [side, el] of [["long", $("model-long")], ["short", $("model-short")]]) {
       const d = m[side] || {}; el.replaceChildren();
       el.append(h("div", { class: "meta" }, h("span", { class: "badge", text: "süre " + d.H + " mum" }),
-        h("span", { class: "badge", text: d.tp_atr ? "TP " + d.tp_atr + "×ATR" : "TP yok" }), h("span", { class: "badge", text: d.sl_atr ? "SL " + d.sl_atr + "×ATR" : "SL yok (acil stop)" })));
+        h("span", { class: "badge", text: d.tp_atr ? "TP " + d.tp_atr + "×ATR" : "TP yok" }), h("span", { class: "badge", text: d.sl_atr ? "SL " + d.sl_atr + "×ATR" : "SL yok" }),
+        h("span", { class: "badge", text: "acil stop %" + (m.emergency_stop_pct ?? "–") + " (her işlemde, otomatik)" })));
       if (!d.rules || !d.rules.length) el.append(h("div", { class: "muted", text: "Bu yönde doğrulamadan geçen kural yok." }));
       (d.exit_rules || []).forEach((r) => el.append(h("div", { class: "rule" }, h("b", { text: "ÇIK (kâr al)  " }),
         ...r.flatMap((c, j) => [j ? h("span", { class: "and", text: "  VE  " }) : null, c[0] + " " + c[1] + " " + Number(c[2]).toFixed(4)]))));

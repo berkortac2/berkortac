@@ -95,8 +95,13 @@ düşüş %69'a çıktı. Ayrıntı: [`../reports/SONUCLAR_5DK_BOT.md`](../repor
 1. Her **5 dakikalık mum kapanışında** (+3 sn) izlenen paritelerin son 1200 mumu ve 1 saatlik mumları alınır.
 2. Araştırmadaki özellik kodunun **aynısı** ile göstergeler hesaplanır (RSI, MACD, ADX/DI, ATR,
    korelasyonlar, 1 saatlik bağlam …) ve model kuralları kontrol edilir.
-3. Sinyal varsa ve risk kuralları izin veriyorsa **piyasa emriyle** pozisyon açılır; zarar-kes (3×ATR veya %8,
-   hangisi yakınsa) borsaya `algoOrder` (koşullu emir) olarak girilir.
+3. Sinyal varsa ve risk kuralları izin veriyorsa **piyasa emriyle** pozisyon açılır.
+   - **Acil stop her işlemde otomatik konur:** emir dolar dolmaz Binance'e bir zarar-kes emri gönderilir.
+   - Bu emir `algoOrder` STOP_MARKET türünde, pozisyonun tamamını kapatır.
+   - Seviyesi, 3×ATR stop ile %8 acil stop'tan fiyata yakın olanıdır. Stop hiçbir zaman girişten %8'den uzak olmaz.
+   - Bot kapalıyken ya da internet kesikken de borsada çalışır; ayarlardan kapatılamaz.
+   - Stop emri borsada yoksa bot bir sonraki mumda yeniden koyar. Fiyat stop seviyesini geçmişse pozisyonu hemen kapatır.
+   - Arayüzdeki pozisyon tablosunda "Acil stop" ve "Stop (borsada)" sütunları görünür.
 4. **ÇIK (kâr al):** her mum kapanışında WaveTrend aşırı alım bölgesine (≥ 50) geldiyse pozisyon piyasa emriyle
    kapatılır; en geç 96 mum (8 saat) sonra da kapatılır. Bu çıkış politikası 3.240 alternatif içinden, AL kuralının
    hiç görmediği 2017–2023 verisinde seçildi ve sonraki tüm dönemlerde toplam kârı artırdı.
@@ -130,6 +135,11 @@ Replay testi, botun kayıtlı veride **araştırma backtest'iyle aynı işlemler
 | Sıkı CSP (inline script/eval yok), X-Frame-Options, nosniff, no-referrer | `api.py` |
 | Arayüzde tüm veriler `textContent` ile basılır (XSS yok) | `web/app.js` |
 | Dış kütüphane / CDN yok (tedarik zinciri riski yok) | `web/` |
+| Her pozisyonun borsadaki stop emri başlangıçta ve her mumda doğrulanır; eksikse yeniden konur, fiyat stopu geçmişse pozisyon hemen kapatılır | `engine.py` → `_protect` |
+| Yanıtı kaybolan emir diske yazılır; bot yeniden başlasa bile borsaya sorulur, iki kez emir verilmez | `engine.py` → `pending` |
+| Hedge Mode ve Multi-Assets modu reddedilir (izole marjin şartı) | `broker.py` → `prepare` |
+| 429/418 istek limitinde bekleme: bu sırada yalnızca pozisyon kapatan / koruyan emirler gider | `exchange/binance.py` |
+| Stop emirleri `priceProtect` olmadan: ani çöküşte tetiklenmesi engellenmez | `exchange/binance.py` |
 
 ## Testler
 
@@ -143,6 +153,13 @@ python -m playwright install chromium    # arayüz testi için bir kez (tarayıc
   logda görünmemesi, host/origin/CSRF/içerik tipi/gövde boyutu, kaba kuvvet kilidi, statik dosya yol aşımı,
   çekim izinli anahtarın reddi, bütçe ve limitler.
 - `tests/test_engine_replay.py`: motor = araştırma backtest'i; bütçe hiç aşılmıyor.
+- `tests/test_robustness.py`: kesinti ve emir senaryoları:
+  - kapatma sırası; kısmen ya da hiç dolmayan emirler;
+  - BNB ile ödenen komisyon; bot kapalıyken geçen süre;
+  - hatalı coin; ağ kesintisi; elle açılmış pozisyon;
+  - eksik gösterge değeri; mum boşluğu; saat kayması;
+  - stop'un yeniden kurulması; yeniden başlatmada bekleyen emir;
+  - istek limiti; Multi-Assets modu; stop emri parametreleri.
 - `tests/test_ui.py`: gerçek Chromium ile kurulum → giriş → ayarlar → replay işlemleri → XSS denemesi →
   mobil görünüm → çıkış/giriş.
 

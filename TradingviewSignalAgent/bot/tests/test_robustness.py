@@ -350,3 +350,52 @@ def test_stop_order_fires_in_a_flash_crash():
     asyncio.run(c.conditional_close("BTCUSDT", "SELL", "TAKE_PROFIT_MARKET", 110000.0))
     assert "priceProtect=false" in seen[0] and "priceProtect=true" in seen[1]
     assert "triggerPrice=90000&" in seen[0] and "closePosition=true" in seen[0]
+
+
+# ---------------------------------------------------------------- emergency stop on EVERY trade
+class StratSL(Strat):
+    def __init__(self, direction, sl_atr):
+        super().__init__(direction)
+        self.sl = sl_atr
+
+    def params(self, d):
+        return DirModel(rules=[], H=96, tp_atr=None, sl_atr=self.sl)
+
+
+class RecBrk(Brk):
+    def __init__(self):
+        super().__init__()
+        self.stops = []
+
+    async def set_brackets(self, sym, d, tp, stop, rules):
+        self.stops.append(stop)
+
+
+@pytest.mark.parametrize("direction,sl_atr,expected", [
+    (1, None, 9.2),      # model without an ATR stop: the 8% emergency stop is the exchange stop
+    (1, 3.0, 9.2),       # 3xATR (8.5) is further away than 8%: the emergency stop is used
+    (1, 1.0, 9.5),       # 1xATR (9.5) is closer: that one is used, the emergency stop stays recorded
+    (-1, None, 10.8),    # short: emergency stop above the entry
+])
+def test_every_entry_places_an_exchange_stop_within_the_emergency_distance(direction, sl_atr, expected):
+    t = 1_700_000_100_000 - (1_700_000_100_000 % BAR_MS)
+    b = RecBrk()
+    e = eng(Mkt([t]), b, StratSL(direction, sl_atr))
+    asyncio.run(e.on_bar())
+    pos = e.positions["AAAUSDT"]
+    assert b.stops == [pytest.approx(expected)] and pos.protected
+    assert pos.emergency == pytest.approx(10.0 * (1 - direction * 0.08))
+    assert abs(b.stops[0] / 10.0 - 1) <= 0.08 + 1e-12            # never further than the emergency stop
+
+
+def test_emergency_stop_cannot_be_switched_off():
+    assert Settings(emergency_stop_pct=0).validate() and Settings(emergency_stop_pct=None).validate()
+    assert Settings(emergency_stop_pct=60).validate()
+
+
+def test_paper_mode_applies_the_emergency_stop_too():
+    pos = Position("AAAUSDT", 1, 1.0, 10.0, 0, 0, 96, None, None, 9.2, 10.0, 0.0, 0, bars_held=3)
+    bar = {"open": 9.5, "high": 9.6, "low": 9.0, "close": 9.1}
+    assert Engine._bracket_hit(pos, bar) == (9.2, "Zarar kes (SL)")
+    gap = {"open": 8.9, "high": 9.0, "low": 8.5, "close": 8.7}          # opens below the stop: fills at the open
+    assert Engine._bracket_hit(pos, gap) == (8.9, "Zarar kes (SL)")

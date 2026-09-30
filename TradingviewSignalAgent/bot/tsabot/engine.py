@@ -409,7 +409,9 @@ class Engine:
             return
         self.emit("trade", f"{sig.symbol} {'LONG' if d > 0 else 'SHORT'} açıldı: {fill.qty:g} @ {fill.price:g}, "
                            f"marjin {pos.margin:.2f} USDT" + (f", TP {tp:.6g}" if tp else "")
-                  + f", stop {stop:.6g}" + (" + ÇIK sinyali" if dm.exit_rules else "") + f", en geç {dm.H} mum")
+                  + f", borsada stop {stop:.6g} (acil stop %{self.s.emergency_stop_pct:g} = {emergency:.6g}"
+                  + (f", {dm.sl_atr:g}×ATR = {sl:.6g}" if sl else "") + ", yakın olan)"
+                  + (" + ÇIK sinyali" if dm.exit_rules else "") + f", en geç {dm.H} mum")
 
     async def _exit(self, sym: str, fill: Fill, reason: str) -> None:
         pos = self.positions.pop(sym, None)
