@@ -64,9 +64,10 @@ def test_signed_request_never_puts_secret_on_the_wire():
     c = BinanceFutures("testnet", Secret(KEY), Secret(SECRET), http=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
     with pytest.raises(ExchangeError) as ei:
         asyncio.run(c.account())
-    r = seen[0]
-    assert r.url.host == "demo-fapi.binance.com"
-    assert SECRET not in str(r.url) and SECRET not in str(r.headers) and SECRET.encode() not in r.content
+    for r in seen:                                   # clock sync (public) + the signed call
+        assert r.url.host == "demo-fapi.binance.com"
+        assert SECRET not in str(r.url) and SECRET not in str(r.headers) and SECRET.encode() not in r.content
+    r = [x for x in seen if x.url.path == "/fapi/v3/account"][-1]
     assert r.headers["X-MBX-APIKEY"] == KEY and "signature=" in str(r.url)
     assert KEY not in str(ei.value) and "signature=" not in str(ei.value).replace("signature=***", "")
 

@@ -61,6 +61,12 @@ def check_endpoint(method: str, path: str) -> None:
         raise ForbiddenEndpoint(f"{method} {path} is not on the allow-list")
 
 
+def num(x: float) -> str:
+    """Plain decimal string without exponent or float noise: 1e-05 -> '0.00001', 100.0 -> '100'."""
+    d = Decimal(repr(float(x))).normalize()
+    return format(d, "f")
+
+
 def sign(secret: str, query: str) -> str:
     return hmac.new(secret.encode(), query.encode(), hashlib.sha256).hexdigest()
 
@@ -123,6 +129,7 @@ class BinanceFutures:
                                               headers={"User-Agent": "tsabot/1.0"})
         self.recv_window = recv_window
         self.offset_ms = 0
+        self.synced_at = 0.0
 
     @property
     def has_keys(self) -> bool:
@@ -133,6 +140,21 @@ class BinanceFutures:
 
     async def request(self, method: str, path: str, params: dict | None = None, signed: bool = False,
                       base: str | None = None):
+        if signed and time.time() - self.synced_at > 1800 and path != "/fapi/v1/time":
+            try:                                    # best effort; the -1021 retry below still applies
+                await self.sync_time()
+            except Exception as e:
+                self.synced_at = time.time() - 1500     # retry in ~5 min, keep the old offset
+                log.warning("time sync failed: %s", REDACT.clean(str(e))[:200])
+        try:
+            return await self._request(method, path, params, signed, base)
+        except ExchangeError as e:
+            if signed and e.code == -1021:          # timestamp outside recvWindow: nothing was executed
+                await self.sync_time()
+                return await self._request(method, path, params, signed, base)
+            raise
+
+    async def _request(self, method: str, path: str, params: dict | None, signed: bool, base: str | None):
         method = method.upper()
         check_endpoint(method, path)
         url_base = base or self.base
@@ -166,6 +188,7 @@ class BinanceFutures:
         srv = (await self.request("GET", "/fapi/v1/time"))["serverTime"]
         t1 = int(time.time() * 1000)
         self.offset_ms = int(srv - (t0 + t1) / 2)
+        self.synced_at = time.time()
         return self.offset_ms
 
     async def exchange_info(self) -> dict[str, SymbolRules]:
@@ -207,9 +230,12 @@ class BinanceFutures:
     async def market_order(self, symbol: str, side: str, qty: float, reduce_only: bool = False,
                            client_id: str | None = None) -> dict:
         return await self.request("POST", "/fapi/v1/order", {
-            "symbol": symbol, "side": side, "type": "MARKET", "quantity": f"{qty:f}".rstrip("0").rstrip("."),
+            "symbol": symbol, "side": side, "type": "MARKET", "quantity": num(qty),
             "reduceOnly": "true" if reduce_only else None, "newClientOrderId": client_id,
             "newOrderRespType": "RESULT"}, True)
+
+    async def order(self, symbol: str, order_id: int) -> dict:
+        return await self.request("GET", "/fapi/v1/order", {"symbol": symbol, "orderId": order_id}, True)
 
     async def conditional_close(self, symbol: str, side: str, kind: str, trigger: float) -> dict:
         """Exchange-side TP/SL (algo order API, mandatory since 2025-12-09): closes the whole position."""
@@ -217,7 +243,7 @@ class BinanceFutures:
             raise ValueError("only STOP_MARKET / TAKE_PROFIT_MARKET close orders are used")
         return await self.request("POST", "/fapi/v1/algoOrder", {
             "algoType": "CONDITIONAL", "symbol": symbol, "side": side, "type": kind,
-            "triggerPrice": f"{trigger:f}".rstrip("0").rstrip("."), "closePosition": "true",
+            "triggerPrice": num(trigger), "closePosition": "true",
             "workingType": "CONTRACT_PRICE", "priceProtect": "true"}, True)
 
     async def cancel_conditionals(self, symbol: str):

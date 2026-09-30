@@ -1,6 +1,7 @@
 """Order execution: simulated (paper/replay) and Binance USDT-M futures (testnet/live)."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from dataclasses import dataclass
@@ -88,18 +89,42 @@ class BinanceBroker:
 
     async def open(self, symbol, direction, qty, ref_price, rules) -> Fill:
         await self._prep_symbol(symbol)
+        # a stop left over from an earlier position (e.g. its cancel failed) must not close the new one
+        await self.cancel_brackets(symbol)
         r = await self.client.market_order(symbol, "BUY" if direction > 0 else "SELL", qty,
                                            client_id=f"tsa{int(time.time() * 1000)}")
-        px = float(r.get("avgPrice") or 0) or ref_price
-        q = float(r.get("executedQty") or qty)
-        return Fill(px, q, px * q * TAKER_FEE)
+        return await self._filled(symbol, r, ref_price)
 
     async def close(self, symbol, direction, qty, ref_price, slip=True) -> Fill:
-        await self.cancel_brackets(symbol)
-        r = await self.client.market_order(symbol, "SELL" if direction > 0 else "BUY", qty, reduce_only=True,
+        # close FIRST, then remove the exchange stop: if the market order fails the position keeps its stop
+        side = "SELL" if direction > 0 else "BUY"
+        r = await self.client.market_order(symbol, side, qty, reduce_only=True,
                                            client_id=f"tsx{int(time.time() * 1000)}")
+        fill = await self._filled(symbol, r, ref_price)
+        if fill.qty < qty * 0.999:                  # partial fill: close what is really left
+            amt, _ = await self.position_of(symbol)
+            if amt != 0.0:
+                r2 = await self.client.market_order(symbol, side, abs(amt), reduce_only=True,
+                                                    client_id=f"tsy{int(time.time() * 1000)}")
+                f2 = await self._filled(symbol, r2, ref_price)
+                q = fill.qty + f2.qty
+                fill = Fill((fill.price * fill.qty + f2.price * f2.qty) / q, q, fill.fee + f2.fee)
+        await self.cancel_brackets(symbol)
+        return fill
+
+    async def _filled(self, symbol, r: dict, ref_price: float) -> Fill:
+        """Fill of a MARKET order; waits briefly if the exchange has not reported it as final yet.
+        Raises when nothing was executed (the caller then keeps / reconciles the position)."""
+        final = ("FILLED", "EXPIRED", "CANCELED", "REJECTED", "EXPIRED_IN_MATCH")
+        for _ in range(3):
+            if r.get("status") in final or r.get("orderId") is None:
+                break
+            await asyncio.sleep(0.5)
+            r = await self.client.order(symbol, r["orderId"])
+        q = float(r.get("executedQty") or 0)
+        if q <= 0:
+            raise ExchangeError(0, None, f"{symbol}: piyasa emri dolmadı (durum {r.get('status')})")
         px = float(r.get("avgPrice") or 0) or ref_price
-        q = float(r.get("executedQty") or qty)
         return Fill(px, q, px * q * TAKER_FEE)
 
     async def set_brackets(self, symbol, direction, tp, sl, rules):
@@ -137,7 +162,9 @@ class BinanceBroker:
             if closing:
                 q = sum(float(t["qty"]) for t in closing)
                 px = sum(float(t["price"]) * float(t["qty"]) for t in closing) / q
-                fee = sum(float(t.get("commission", 0)) for t in closing)
+                # commission may be paid in BNB (fee discount): only USDT amounts can be added as USDT
+                fee = sum(float(t.get("commission", 0)) if t.get("commissionAsset", "USDT") == "USDT"
+                          else float(t["price"]) * float(t["qty"]) * TAKER_FEE for t in closing)
             else:
                 q, px, fee = pos.qty, await self.client.price(sym), pos.qty * pos.entry_price * TAKER_FEE
                 log.warning("%s closed on exchange but no closing fills found; using last price", sym)

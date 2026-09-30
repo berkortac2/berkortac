@@ -25,8 +25,9 @@ class DirModel:
 
     @staticmethod
     def _first(rules, row: dict) -> int:
+        # a missing / not-yet-defined feature (NaN) never satisfies a condition, as in the research masks
         for i, rule in enumerate(rules):
-            if all(bool(OPS[op](row.get(f, 0.0), v)) for f, op, v in rule):
+            if all(bool(OPS[op](row.get(f, np.nan), v)) for f, op, v in rule):
                 return i
         return -1
 
@@ -35,6 +36,7 @@ class DirModel:
         return self._first(self.rules, row)
 
     def should_exit(self, row: dict) -> bool:
+        row = {k: (np.nan if v is None else v) for k, v in row.items()}
         return bool(self.exit_rules) and self._first(self.exit_rules, row) >= 0
 
 
@@ -79,15 +81,16 @@ class Strategy:
             return None
         k5 = k5.reset_index(drop=True)
         f = compute_features(k5, "5m", k1h.reset_index(drop=True) if k1h is not None else None)
-        row = {k: (0.0 if not np.isfinite(v) else float(v)) for k, v in f.iloc[-1].items()}
+        row = {k: float(v) if np.isfinite(v) else np.nan for k, v in f.iloc[-1].items()}
         atr = float(ta.atr(k5["high"].to_numpy(), k5["low"].to_numpy(), k5["close"].to_numpy(), 14)[-1])
         d, r = 0, -1
         if allow_long and (r := self.long.match(row)) >= 0:
             d = 1
         elif allow_short and (r := self.short.match(row)) >= 0:
             d = -1
+        feats = {k: row.get(k, np.nan) for k in self.features_used}
         return Signal(symbol, int(k5["open_time"].iloc[-1]), d, r, float(k5["close"].iloc[-1]), atr,
-                      {k: row.get(k, 0.0) for k in self.features_used})
+                      {k: (v if np.isfinite(v) else None) for k, v in feats.items()})
 
     def describe(self) -> dict:
         def one(d: DirModel):

@@ -27,7 +27,14 @@ async function api(method, path, body) {
   return data;
 }
 const fmt = (x, d = 2) => (x == null || isNaN(x)) ? "–" : Number(x).toLocaleString("tr-TR", { minimumFractionDigits: d, maximumFractionDigits: d });
-const fpx = (x) => (x == null) ? "–" : Number(x).toPrecision(6).replace(/\.?0+$/, "");
+// prices / quantities: 6 significant digits, trailing zeros removed only after the decimal point
+const fpx = (x) => {
+  if (x == null || !isFinite(Number(x))) return "–";
+  const v = Number(x);
+  let t = Math.abs(v) >= 1e5 ? v.toFixed(1) : v.toPrecision(6);
+  if (t.includes("e")) t = v.toFixed(10);
+  return t.includes(".") ? t.replace(/0+$/, "").replace(/\.$/, "") : t;
+};
 const money = (x) => (x == null) ? "–" : (x >= 0 ? "+" : "") + fmt(x) + " $";
 const cls = (x) => x > 0 ? "pos" : x < 0 ? "neg" : "";
 const tstr = (ms) => ms ? new Date(ms).toLocaleString("tr-TR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "–";
@@ -109,10 +116,16 @@ function renderStatus(st) {
   const s = st.stats || {}; $("k-trades").textContent = (s.trades || 0) + " · " + (s.win_rate == null ? "–" : fmt(100 * s.win_rate, 1) + " %");
   $("k-fees").textContent = "ödenen komisyon " + fmt(s.fees) + " $";
 }
+// the stop that is really on the exchange: the tighter of the ATR stop and the emergency stop
+function stopOf(p) {
+  const xs = [p.sl, p.emergency].filter((x) => x != null);
+  if (!xs.length) return null;
+  return p.direction > 0 ? Math.max(...xs) : Math.min(...xs);
+}
 function renderPositions(el, ps) {
   table(el, [["Parite", (p) => p.symbol], ["Yön", (p) => dirTag(p.direction)], ["Miktar", (p) => fpx(p.qty)],
     ["Giriş", (p) => fpx(p.entry_price)], ["Son", (p) => fpx(p.last_price)], ["TP", (p) => fpx(p.tp)],
-    ["SL", (p) => fpx(p.sl || p.emergency)], ["Mum", (p) => p.bars_held + " / " + p.H], ["Marjin", (p) => fmt(p.margin)],
+    ["Stop", (p) => fpx(stopOf(p))], ["Mum", (p) => p.bars_held + " / " + p.H], ["Marjin", (p) => fmt(p.margin)],
     ["K/Z", (p) => money(p.unrealized), (p) => cls(p.unrealized)]], ps, "Açık pozisyon yok");
 }
 function renderTrades(ts) {
@@ -123,7 +136,7 @@ function renderTrades(ts) {
 function renderSignals(ss) {
   table($("sig-table"), [["Parite", (s) => s.symbol], ["Sinyal", (s) => dirTag(s.direction)], ["Mum", (s) => tstr(s.bar_time)],
     ["Kapanış", (s) => fpx(s.close)], ["ATR", (s) => fpx(s.atr)],
-    ["Kural özellikleri", (s) => Object.entries(s.features || {}).map(([k, v]) => k + "=" + Number(v).toFixed(3)).join("  ")]],
+    ["Kural özellikleri", (s) => Object.entries(s.features || {}).map(([k, v]) => k + "=" + (v == null ? "–" : Number(v).toFixed(3))).join("  ")]],
     ss, "Bot çalışınca her 5 dk kapanışında dolar");
 }
 function renderFeed(el, evs) {

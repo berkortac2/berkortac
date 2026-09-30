@@ -45,9 +45,21 @@ class LiveMarket:
         df = new if old is None else pd.concat([old, new])
         return df.drop_duplicates("open_time", keep="last").sort_values("open_time").tail(keep).reset_index(drop=True)
 
+    def _need(self, symbol: str, now: int) -> tuple[int, int]:
+        """Bars to request: the whole window at start, afterwards everything missed since the last
+        stored bar (network outage, sleeping computer) so indicators never run over a hole."""
+        if symbol not in self.k5 or not len(self.k5[symbol]):
+            return 1000, 300
+        miss5 = (now - int(self.k5[symbol]["open_time"].iloc[-1])) // BAR_MS + 2
+        miss1 = (now - int(self.k1h[symbol]["open_time"].iloc[-1])) // HOUR_MS + 2
+        if miss5 >= 1000 or miss1 >= 300:            # too far behind: start the buffers again
+            self.k5.pop(symbol, None)
+            self.k1h.pop(symbol, None)
+            return 1000, 300
+        return max(5, int(miss5)), max(3, int(miss1))
+
     async def update(self, symbol: str) -> tuple[pd.DataFrame, pd.DataFrame]:
-        first = symbol not in self.k5
-        n5, n1 = (1000, 300) if first else (5, 3)
+        n5, n1 = self._need(symbol, self.now_ms())
         k5 = await self.client.klines(symbol, "5m", n5)
         k1 = await self.client.klines(symbol, "1h", n1)
         now = self.now_ms()

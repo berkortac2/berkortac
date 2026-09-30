@@ -12,8 +12,11 @@ import logging
 from collections import deque
 from dataclasses import asdict, dataclass
 
+import httpx
+
 from .broker import Fill
 from .config import Settings
+from .exchange.binance import ExchangeError
 from .risk import Risk
 from .secrets import REDACT
 from .store import Store
@@ -21,6 +24,14 @@ from .strategy import Strategy
 
 log = logging.getLogger("tsabot.engine")
 DAY_MS = 86_400_000
+BAR_MS = 300_000
+
+
+def transient(e: Exception) -> bool:
+    """Network failures, timeouts, rate limits and exchange-side 5xx: retry, do not count as bot errors."""
+    if isinstance(e, (httpx.TransportError, asyncio.TimeoutError, ConnectionError)):
+        return True
+    return isinstance(e, ExchangeError) and (e.status >= 500 or e.status in (408, 418, 429) or e.code == -1001)
 
 
 @dataclass
@@ -132,6 +143,10 @@ class Engine:
                     await self.on_bar()
                     self.errors = 0
                 except Exception as e:
+                    if transient(e):
+                        # internet / Binance outage: keep running (exchange stops protect open positions)
+                        self.emit("warn", f"Bağlantı sorunu, sonraki mumda tekrar denenecek: {type(e).__name__}: {e}")
+                        continue
                     self.errors += 1
                     self.emit("error", f"Döngü hatası: {type(e).__name__}: {e}")
                     if self.errors >= 5:
@@ -152,12 +167,22 @@ class Engine:
 
     async def on_bar(self) -> None:
         data = {}
+        failed = {}
         sem = asyncio.Semaphore(8)
 
         async def upd(sym):
             async with sem:
-                data[sym] = await self.market.update(sym)
+                try:
+                    data[sym] = await self.market.update(sym)
+                except Exception as e:          # one bad symbol must not stop the others
+                    failed[sym] = e
         await asyncio.gather(*(upd(s) for s in self.symbols))
+        if failed:
+            if not data:
+                raise next(iter(failed.values()))
+            e = next(iter(failed.values()))
+            self.emit("warn", f"{len(failed)} sembolün verisi alınamadı ({', '.join(sorted(failed)[:5])}): "
+                              f"{type(e).__name__}: {e}")
         for sym, (k5, _) in data.items():
             if len(k5):
                 self.last_prices[sym] = float(k5["close"].iloc[-1])
@@ -198,7 +223,7 @@ class Engine:
             bt = int(bar["open_time"])
             if bt <= max(pos.signal_bar, pos.last_bar):
                 continue
-            pos.bars_held += 1
+            pos.bars_held = int((bt - pos.signal_bar) // BAR_MS)   # counts missed bars / bot downtime too
             pos.last_bar = bt
             if self.broker.simulated:
                 hit = self._bracket_hit(pos, bar)
@@ -297,6 +322,11 @@ class Engine:
             self.emit("warn", f"{sig.symbol}: pozisyon başına bütçe borsanın minimum emir tutarının altında")
             return
         dm = self.strategy.params(sig.direction)
+        amt, _ = await self.broker.position_of(sig.symbol)
+        if amt != 0.0:                       # opened by hand after the bot started: never merge into it
+            getattr(self.broker, "external", set()).add(sig.symbol)
+            self.emit("warn", f"{sig.symbol}: borsada bu coinde botun açmadığı bir pozisyon var, sinyal atlandı")
+            return
         if self.stop_event.is_set():
             return
         try:

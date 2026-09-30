@@ -72,8 +72,8 @@ anahtarı ortam değişkeniyle de verebilirsin: `BINANCE_API_KEY`, `BINANCE_API_
   Böylece toplam risk hiçbir zaman verdiğin bütçeyi aşmaz.
 - **Günlük zarar limiti**: aşılınca o gün (UTC) yeni işlem açılmaz.
 - **Maks. toplam zarar**: aşılınca bot kendini durdurur.
-- **Acil stop**: modelin TP/SL'si olmayan (süre çıkışlı) işlemlerinde borsada bekleyen koruma emri
-  (bot kapalıyken ani çöküşe karşı).
+- **Acil stop** (%8): her pozisyonda borsada bekleyen zarar-kes emri, 3×ATR stop'undan hangisi fiyata daha
+  yakınsa o kullanılır. Bot kapalıyken ya da internet kesikken de çalışır.
 - **Acil kapat** düğmesi: botun açtığı tüm pozisyonları piyasa fiyatından kapatır ve durdurur.
 - Bot, senin elle açtığın pozisyonların olduğu coinlere dokunmaz.
 
@@ -101,6 +101,17 @@ düşüş %69'a çıktı. Ayrıntı: [`../reports/SONUCLAR_5DK_BOT.md`](../repor
    kapatılır; en geç 96 mum (8 saat) sonra da kapatılır. Bu çıkış politikası 3.240 alternatif içinden, AL kuralının
    hiç görmediği 2017–2023 verisinde seçildi ve sonraki tüm dönemlerde toplam kârı artırdı.
 5. Tüm işlemler, komisyonlar ve net K/Z `data/bot.db` içinde saklanır ve arayüzde görünür.
+6. **Kesintiler:**
+   - İnternet ya da Binance geçici olarak cevap vermezse bot durmaz, bir sonraki mumda yeniden dener.
+     Bu sırada açık pozisyonları borsadaki stop emirleri korur.
+   - Bağlantı dönünce kaçırılan mumlar indirilir; göstergeler boşluklu veriyle hesaplanmaz.
+   - Bot kapalıyken geçen süre pozisyonun tutma süresine sayılır.
+   - Tek bir coinin verisi alınamazsa diğer coinler işlem görmeye devam eder.
+7. **Emir güvenliği:**
+   - Pozisyon kapatılırken önce piyasa emri gönderilir; stop emri ancak pozisyon kapandıktan sonra silinir.
+   - Kısmen dolan emirlerin kalanı da kapatılır.
+   - Yeni girişten önce o coinde eski bir stop emri kalmışsa silinir.
+   - O coinde senin elle açtığın bir pozisyon varsa bot ona karışmaz.
 
 Replay testi, botun kayıtlı veride **araştırma backtest'iyle aynı işlemleri** açıp kapattığını doğrular
 (`tests/test_engine_replay.py`).
