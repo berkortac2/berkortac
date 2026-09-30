@@ -218,3 +218,30 @@ def backfill(path: Path, extra: pd.DataFrame) -> pd.DataFrame:
     df = df.drop_duplicates("open_time").sort_values("open_time").reset_index(drop=True)
     df.to_parquet(path, index=False)
     return df
+
+
+def download_funding(symbol: str, months: list[str], workers: int = 8) -> pd.DataFrame:
+    """Realised funding rates (USDT-M perps) for the given 'YYYY-MM' months: calc_time (ms), interval_h, rate.
+    Months not yet published (the running month) are simply missing."""
+    urls = [f"{BASE}/data/futures/um/monthly/fundingRate/{symbol}/{symbol}-fundingRate-{m}.zip" for m in months]
+
+    def one(url):
+        r = _get(url)
+        if r is None:
+            return None
+        c = _get(url + ".CHECKSUM")
+        if c is not None and hashlib.sha256(r.content).hexdigest() != c.text.split()[0]:
+            raise RuntimeError(f"checksum mismatch {url}")
+        with zipfile.ZipFile(io.BytesIO(r.content)) as zf:
+            raw = zf.read(zf.namelist()[0])
+        head = raw[:64].decode(errors="ignore")
+        df = pd.read_csv(io.BytesIO(raw), header=0 if head.startswith("calc_time") else None)
+        df.columns = ["calc_time", "interval_h", "rate"]
+        return df
+
+    with ThreadPoolExecutor(workers) as ex:
+        parts = [p for p in ex.map(one, urls) if p is not None]
+    if not parts:
+        return pd.DataFrame(columns=["calc_time", "interval_h", "rate"])
+    out = pd.concat(parts, ignore_index=True).drop_duplicates("calc_time").sort_values("calc_time")
+    return out.astype({"calc_time": "int64", "interval_h": "int64", "rate": "float64"}).reset_index(drop=True)

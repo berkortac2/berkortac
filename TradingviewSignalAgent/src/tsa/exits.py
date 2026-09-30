@@ -9,8 +9,11 @@ EXIT_FEATS = ["rsi", "ema50_dist", "hist_atr", "stoch", "cci", "wt", "chan20", "
 
 
 @njit(cache=True)
-def sim(o, h, l, c, atr, sig, F, seg_s, seg_e, Hmax, tp, sl, emerg, ta, td, ind, thr, cost):
+def sim_trades(o, h, l, c, atr, sig, F, seg_s, seg_e, Hmax, tp, sl, emerg, ta, td, ind, thr, cost):
+    """Like sim() but also returns the signal bar and the exit bar index of every trade."""
     n = o.shape[0]
+    out_t = np.empty(n, np.int64)
+    out_x = np.empty(n, np.int64)
     out_net = np.empty(n)
     out_bars = np.empty(n)
     out_why = np.empty(n, np.int8)
@@ -54,9 +57,18 @@ def sim(o, h, l, c, atr, sig, F, seg_s, seg_e, Hmax, tp, sl, emerg, ta, td, ind,
                     break
             if np.isnan(px):
                 px = c[xi]
+            out_t[k] = t
+            out_x[k] = xi
             out_net[k] = px / en - 1.0 - cost
             out_bars[k] = xi - t
             out_why[k] = why
             k += 1
             t = xi
-    return out_net[:k], out_bars[:k], out_why[:k]
+    return out_t[:k], out_x[:k], out_net[:k], out_bars[:k], out_why[:k]
+
+
+@njit(cache=True)
+def sim(o, h, l, c, atr, sig, F, seg_s, seg_e, Hmax, tp, sl, emerg, ta, td, ind, thr, cost):
+    _, _, net, bars, why = sim_trades(o, h, l, c, atr, sig, F, seg_s, seg_e, Hmax, tp, sl, emerg, ta, td, ind,
+                                      thr, cost)
+    return net, bars, why

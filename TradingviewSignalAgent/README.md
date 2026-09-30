@@ -43,7 +43,7 @@ yeni kurallar kilitli testte (Şubat–Eylül 2026) ilk turun 5 dk modelini geç
 **5 dk modeli değişmedi**. 5 dk'da komisyonu karşılayan SAT kuralı yine yok. Bot bu modeli %8 acil stop, 8 pozisyon,
 1x kaldıraçla çalıştırır. AL pozisyonları **ÇIK (kâr al) sinyaliyle** kapanır: WaveTrend ≥ 50, zarar kes
 3×ATR, en geç 8 saat (3.240 çıkış politikası içinden seçildi). 5 dk'da kazandıran bir SAT (short) girişi 3 farklı yöntemle
-arandı, bulunamadı. Ayrıntı ve dürüst risk tablosu: [`reports/SONUCLAR_5DK_BOT.md`](reports/SONUCLAR_5DK_BOT.md).
+arandı, bulunamadı. Hesap getirisi (1.000 USDT, 8 pozisyon, 1x; komisyon, kayma ve funding düşülmüş): Şubat–Eylül 2026'da +%14.4, maks. düşüş %5.3; 2025'te hiç kullanılmamış 10 coinde +%26. Ayrıntı ve dürüst risk tablosu: [`reports/SONUCLAR_5DK_BOT.md`](reports/SONUCLAR_5DK_BOT.md).
 
 ## TradingView'a kurulum
 

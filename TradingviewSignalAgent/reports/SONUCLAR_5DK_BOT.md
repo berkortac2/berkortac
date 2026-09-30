@@ -118,7 +118,7 @@ verisi ile 2023–2026 döneminin en zayıf t-istatistiğine göre önceden beli
 - **Zarar kes: giriş anındaki ATR'nin 3 katı** (veya %8 acil stop, hangisi yakınsa).
 - **En geç 96 mum (8 saat)** sonra çık.
 
-| Dönem | Eski çıkış (24 mum + %8 stop): işlem · net/işlem · kazanma | Yeni ÇIK politikası: işlem · net/işlem · kazanma · ort. süre | Toplam kâr değişimi |
+| Dönem | Eski çıkış (24 mum + %8 stop): işlem · net/işlem · kazanma | Yeni ÇIK politikası: işlem · net/işlem · kazanma · ort. süre | Tüm işlemlerin toplam kârındaki değişim (yeni ÷ eski − 1; hesap getirisi değil) |
 |---|---|---|---|
 | 2017–2023 (AL kuralı hiç görmedi) | 4.575 · +%0.54 · %58.8 | 5.450 · +%0.48 · %54.0 · 27 mum | **+%5** |
 | 2023-09 → 2026-02 | 1.317 · +%0.45 · %59.9 | 1.537 · +%0.59 · %58.5 · 28 mum | **+%51** |
@@ -130,8 +130,8 @@ verisi ile 2023–2026 döneminin en zayıf t-istatistiğine göre önceden beli
   (3.240 politikadan bunu başaran 16 politikadan biri).
 - Aynı AL girişleri 2017–2023'te (hiç görülmemiş veri) de işlem başı +%0.5 kazandırıyor: giriş kuralı da
   bağımsız veride doğrulanmış oldu.
-- Bölüm 5'teki portföy simülasyonu eski çıkışla yapılmıştı; yeni çıkış her dönemde toplam kârı artırdığı için o tablo
-  ihtiyatlı kabul edilebilir.
+- Son sütun **hesap getirisi değildir**: yeni çıkışın, tüm sinyallerin toplam kârını eski çıkışa göre yüzde kaç
+  artırdığıdır. Bütçeli hesap getirisi (komisyon + kayma + funding sonrası) Bölüm 11'de.
 - Motorun ÇIK mantığı araştırma simülatörüyle birebir test edildi (`bot/tests/test_engine_replay.py`).
 
 ## 10. SAT (short) araması — 3. tur
@@ -148,13 +148,78 @@ alacağını söyler. Pine göstergesindeki SAT etiketleri yalnızca 4 saat ve 1
 zayıftır (4s short: eğitim coinlerinde +%0.14, görülmemiş coinlerde −%0.26/işlem); short girişi yerine
 "risk / kâr al uyarısı" olarak kullanılması önerilir.
 
-## 11. Sonuç ve öneri
+## 11. Hesap getirisi — bütçe, pozisyon sayısı ve kaldıraçla (net: komisyon + kayma + funding)
+
+`scripts/19_account_returns.py`: yeni ÇIK politikasının işlemleri, botun kullanacağı sırayla bir hesaba uygulanır.
+Başlangıç 1.000 USDT; pozisyon başı marjin = min(bütçe, bakiye) / N (kâr tekrar kullanılmaz); her coin'de tek pozisyon;
+N pozisyon doluysa yeni sinyal atlanır; stop olan pozisyonun yeri hemen boşalır (bot da böyle çalışır).
+
+**Maliyetler (hepsi düşülmüş):**
+- Binance USDT-M taker komisyonu %0.05 × 2 taraf (VIP0, BNB indirimi yok);
+- kayma %0.02 × 2 taraf; toplam **%0.14 / işlem**;
+- **funding**: data.binance.vision'dan gerçek funding oranları. Long pozisyon, açık kaldığı her funding anında oran ×
+  pozisyon büyüklüğü öder ya da alır. Eylül 2026 dosyası henüz yayımlanmadığı için o ay coin'in son 30 günlük medyan
+  oranı kullanıldı.
+- Ortalama tutma 2–3 saat olduğundan funding işlem başına yalnızca −%0.003 … +%0.003.
+
+**Kilitli test (16 Şubat – 28 Eylül 2026, 36 coin, 543 sinyal, işlem başı net +%0.43, kazanma %63):**
+
+| Ayar | Hesap getirisi | Maks. düşüş | En iyi gün | En kötü gün |
+|---|---|---|---|---|
+| **8 pozisyon, 1x (varsayılan)** | **+%14.4** | **%5.3** | +%3.8 | −%3.7 |
+| 8 pozisyon, 2x | +%28.8 | %9.8 | +%7.6 | −%7.4 |
+| 8 pozisyon, 3x | +%43.0 | %13.5 | +%11.4 | −%11.0 |
+| 4 pozisyon, 1x | +%15.9 | %6.8 | +%4.3 | −%5.8 |
+| 2 pozisyon, 1x | +%2.5 | %17.7 | +%3.6 | −%7.0 |
+| Al-tut: BTC | +%21.0 | %29.4 | | |
+| Al-tut: 36 coin eşit ağırlık | +%37.8 | %31.3 | +%12.2 | −%7.8 |
+
+Aylık (8 pozisyon, 1x): Şub −0.5, Mar +0.8, Nis −0.1, May +0.3, **Haz +12.7**, Tem +0.7, Ağu +4.7, Eyl −4.2 (%).
+
+**Hiç kullanılmamış 10 coin, 2 Ocak 2025 – 16 Şubat 2026 (884 sinyal, net +%0.69/işlem):**
+
+| Ayar | Hesap getirisi | Maks. düşüş |
+|---|---|---|
+| **8 pozisyon, 1x** | **+%33.4** (2025: +%26.0) | %29.4 |
+| 8 pozisyon, 2x | +%39.4 | %52.2 |
+| 8 pozisyon, 3x | +%23.9 | %69.0 |
+| 4 pozisyon, 1x | +%16.9 | %38.8 |
+| 2 pozisyon, 1x | −%3.8 | %47.8 |
+| Al-tut: 10 coin eşit ağırlık | **−%83.1** | %86.6 |
+
+**Yıllara göre (8 pozisyon, 1x, 12 büyük coin):**
+- 2020: +%24
+- 2021: +%130
+- 2022: −%1.7
+- Oca–Ağu 2023: +%20
+- Eyl–Ara 2023: +%12 *
+- 2024: +%62.5 *
+- 2025: +%16.6 *
+
+\* AL kuralı 2023-09 → 2026-02 verisinde bulunduğu için bu dönem iyimserdir. 2020–2023 ise kuralın hiç görmediği
+veridir; bu dönemde maksimum düşüş %33 oldu.
+
+**Neden sayılar "bir günlük kripto hareketi" kadar görünüyor?**
+- Strateji zamanın yalnızca **%11'inde** piyasada. Ortalama 0.29 pozisyon açık; tek seferde 26 coin'e kadar sinyal
+  kümelenebiliyor (çöküş anları).
+- Varsayılan ayarda her işlem bütçenin 1/8'i ile 1x açılıyor. Yani hesap, bir coin'in günlük %16'lık hareketinin
+  ancak 1/8'ini yakalayabilir.
+- Karşılığında düşüş küçük kalıyor: aynı dönemde al-tut %30 düşüş yaşadı, bot %5.3.
+- 2025'te altcoin sepeti %83 kaybederken bot +%33 kazandı.
+- Kaldıraçla getiri artıyor ama düşüş de büyüyor: 2025'te 3x, 2x'ten **daha az** kazandırdı ve %69 düşüş yaşattı.
+- Sonuçlar, bir sinyal kümesinde hangi işlemlerin yakalandığına duyarlı. 2025'te stop olan pozisyonun yeri boşalmasaydı
+  (Bölüm 5'teki eski ihtiyatlı simülasyon) sonuç +%45 değil +%5 olurdu.
+
+## 12. Sonuç ve öneri
 
 - 5 dk'da işe yarayan tek desen: **yüksek oynaklıkta sert düşüş sonrası kısa süreli tepki alımı (AL)**. Kârları olaylara
   bağlı; sakin aylarda küçük zararlar olur. SAT tarafı 5 dk'da komisyonu karşılamıyor.
+- Beklenti (varsayılan 8 pozisyon, 1x, net): kilitli testte 7.5 ayda +%14 (maks. düşüş %5); 2025'te hiç görülmemiş
+  coinlerde +%26. Kârın çoğu birkaç çöküş-tepki gününden geliyor. 2x kaldıraç getiriyi ikiye katlıyor ama kötü bir
+  yılda %50'yi aşan düşüş getiriyor (Bölüm 11).
 - Önce **Paper** modunda en az 2–4 hafta çalıştır, sonuçları bu tabloyla karşılaştır; canlıda küçük bütçe ve 1x kaldıraçla başla.
 - Yatırım tavsiyesi değildir; geçmiş performans geleceği garanti etmez.
 
 Dosyalar: `reports/deep5m_final_results.csv`, `deep5m_models.json`, `deep5m_final_trades.parquet`,
-`bot_trades_5m.parquet`, `portfolio_sim_5m.json`, `entry_study.json`, `search/trials_5m_deep.parquet`.
-Betikler: `scripts/08`–`18` (çıkış: `17_exit_study.py`, SAT: `16_short_search.py`, `18_short_mirror.py`).
+`bot_trades_5m.parquet`, `portfolio_sim_5m.json`, `account_returns_5m.json`, `account_trades_5m.parquet`, `entry_study.json`, `search/trials_5m_deep.parquet`.
+Betikler: `scripts/08`–`19` (hesap getirisi: `19_account_returns.py`, çıkış: `17_exit_study.py`, SAT: `16_short_search.py`, `18_short_mirror.py`).

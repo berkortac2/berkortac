@@ -77,15 +77,18 @@ anahtarı ortam değişkeniyle de verebilirsin: `BINANCE_API_KEY`, `BINANCE_API_
 - **Acil kapat** düğmesi: botun açtığı tüm pozisyonları piyasa fiyatından kapatır ve durdurur.
 - Bot, senin elle açtığın pozisyonların olduğu coinlere dokunmaz.
 
-## Ne beklemeli (geçmiş simülasyon, 1.000 USDT, 8 pozisyon, 1x, %8 acil stop)
+## Ne beklemeli (geçmiş simülasyon, 1.000 USDT, ÇIK politikası)
 
-| Dönem | Sonuç | Maks. düşüş |
-|---|---|---|
-| Şubat–Eylül 2026 (kilitli test, 36 coin) | +%11.1 | %4.2 |
-| Ocak 2025–Şubat 2026 (hiç kullanılmamış 10 coin) | +%5.2 | %24.0 |
+Rakamlar **net**: Binance taker komisyonu (%0.05 × 2), kayma (%0.02 × 2) ve gerçek funding ödemeleri düşülmüş.
 
-Kârlar olaylara bağlı (sert düşüş sonrası tepki alımları); sakin aylarda küçük zararlar olur. 2x kaldıraçta aynı
-dönemlerde düşüş %50'yi aştı. Ayrıntı: [`../reports/SONUCLAR_5DK_BOT.md`](../reports/SONUCLAR_5DK_BOT.md).
+| Dönem | 8 pozisyon, 1x (varsayılan) | Maks. düşüş | 8 pozisyon, 2x | Maks. düşüş | Aynı dönemde al-tut |
+|---|---|---|---|---|---|
+| Şubat–Eylül 2026 (kilitli test, 36 coin) | +%14.4 | %5.3 | +%28.8 | %9.8 | BTC +%21, sepet +%38 (düşüş %30) |
+| Ocak 2025–Şubat 2026 (hiç kullanılmamış 10 coin) | +%33.4 | %29.4 | +%39.4 | %52.2 | sepet −%83 |
+
+Bot zamanın yalnızca yaklaşık %11'inde pozisyonda. Kârlar olaylara bağlı (sert düşüş sonrası tepki alımları): kilitli
+testte kârın çoğu Haziran 2026'daki birkaç günden geldi, sakin aylarda küçük zararlar olur. 3x kaldıraçta 2025'te
+düşüş %69'a çıktı. Ayrıntı: [`../reports/SONUCLAR_5DK_BOT.md`](../reports/SONUCLAR_5DK_BOT.md) (Bölüm 11).
 
 ## Bot nasıl işlem yapar
 
