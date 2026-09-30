@@ -48,6 +48,8 @@ python -m tsabot                            # sadece web arayüzü: http://127.0
   geçmişi) varsayılan olarak `%LOCALAPPDATA%\TSABot` içindedir; kurulu TSABot.exe de aynı klasörü kullanır.
   Geliştirirken `TSABOT_DATA_DIR` ortam değişkenini ayrı bir klasöre ver (ör. `set TSABOT_DATA_DIR=%CD%\devdata`)
   ve geliştirme kopyasını paper modunda çalıştır.
+- Masaüstü uygulaması tek kopya çalışır (sabit adlı Windows mutex'i): kurulu TSABot.exe açıkken
+  `python TSABot.pyw` yeni pencere açmaz. Aynı PC'de denerken `python -m tsabot --port 8766` kullan.
 - Araştırma kısmı: `cd TradingviewSignalAgent && pip install -r requirements.txt && python -m pytest -q`.
   `data/` (~25 GB) repoda yok; gerekirse `scripts/01_download.py`, `02_build_features.py`,
   `08_extend_5m_data.py` ile yeniden üretilir. Veri yoksa ilgili testler kendiliğinden atlanır.
