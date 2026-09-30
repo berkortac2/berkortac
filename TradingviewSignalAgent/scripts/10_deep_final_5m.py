@@ -5,7 +5,9 @@ Selection (fixed BEFORE the locked period is loaded; only validation columns are
   * PRECISE long  = best-score rules trial trading long only
   * PRECISE short = best-score rules trial trading short only, kept only if score >= 1.5,
                     pos_folds >= 0.75 and avg_net > 0
-  * FREQUENT      = same, restricted to trials with >= 4x the precise long trade frequency
+  * FREQUENT      = among long rules trials with score >= 5, positive in all 4 folds and at least
+                    1.5x the precise trade frequency: the largest validation net profit per coin-day
+                    (fixed after seeing VALIDATION results only; the locked period is still untouched)
   * BOT/PINE model = the variant (precise / frequent) with the larger validation
                     net profit per coin-day among those with t-stat >= 2
 """
@@ -49,11 +51,12 @@ def pick(tr: pd.DataFrame) -> dict:
     S = r[r.side == "short"].sort_values("score", ascending=False)
     out["precise_long"] = L.iloc[0]
     base_f = out["precise_long"].trades_per_coin_day
-    Lf = L[L.trades_per_coin_day >= 4 * base_f]
+    Lf = L[(L.trades_per_coin_day >= 1.5 * base_f) & (L.score >= 5) & (L.pos_folds >= 1.0)]
+    Lf = Lf.sort_values("net_per_coin_day", ascending=False)
     out["frequent_long"] = Lf.iloc[0] if len(Lf) else None
     ok = S[(S.score >= 1.5) & (S.pos_folds >= 0.75) & (S.avg_net > 0)]
     out["precise_short"] = ok.iloc[0] if len(ok) else None
-    okf = ok[ok.trades_per_coin_day >= 4 * base_f]
+    okf = ok[ok.trades_per_coin_day >= 1.5 * base_f].sort_values("net_per_coin_day", ascending=False)
     out["frequent_short"] = okf.iloc[0] if len(okf) else None
     return out
 
