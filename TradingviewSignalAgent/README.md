@@ -41,7 +41,9 @@ ve MACD uyumsuzluğu belirleyici. SAT kuralları yalnızca 4s, 1G ve 1H'de doğr
 2017–2026 arası 8,6 milyon 5 dk mumla AL ve SAT ayrı ayrı 2.000 yeni deneme yapıldı. Doğrulamada çok güçlü görünen
 yeni kurallar kilitli testte (Şubat–Eylül 2026) ilk turun 5 dk modelini geçemedi; önceden yazılmış seçim kuralı gereği
 **5 dk modeli değişmedi**. 5 dk'da komisyonu karşılayan SAT kuralı yine yok. Bot bu modeli %8 acil stop, 8 pozisyon,
-1x kaldıraçla çalıştırır. Ayrıntı ve dürüst risk tablosu: [`reports/SONUCLAR_5DK_BOT.md`](reports/SONUCLAR_5DK_BOT.md).
+1x kaldıraçla çalıştırır. AL pozisyonları **ÇIK (kâr al) sinyaliyle** kapanır: WaveTrend ≥ 50, zarar kes
+3×ATR, en geç 8 saat (3.240 çıkış politikası içinden seçildi). 5 dk'da kazandıran bir SAT (short) girişi 3 farklı yöntemle
+arandı, bulunamadı. Ayrıntı ve dürüst risk tablosu: [`reports/SONUCLAR_5DK_BOT.md`](reports/SONUCLAR_5DK_BOT.md).
 
 ## TradingView'a kurulum
 

@@ -19,76 +19,21 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from numba import njit
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 from tsa.dataset import final_cutoff, load_dataset, load_universe  # noqa: E402
+from tsa.exits import EXIT_FEATS, sim  # noqa: E402,F401
 from tsa.models import offline as off  # noqa: E402
 from tsa.search.deep5m import FEATURE_DIR, SPOT_SEGMENTS  # noqa: E402
 
 COST = 0.0014
 EMERG = 0.08
-EXIT_FEATS = ["rsi", "ema50_dist", "hist_atr", "stoch", "cci", "wt", "chan20", "di"]
 IND = {"none": (-1, [0.0]), "rsi": (0, [0.0, 0.2, 0.4]), "ema50": (1, [0.0, 1.0]), "macd_hist": (2, [0.0]),
        "stoch": (3, [0.6, 0.9]), "cci": (4, [1.0]), "wt": (5, [0.0, 1.0]), "chan20": (6, [0.8]), "di": (7, [0.0, 0.2])}
 GRID = dict(Hmax=[12, 24, 48, 96], tp=[0.0, 1.0, 1.5, 2.0, 3.0, 5.0], sl=[0.0, 1.5, 3.0],
             trail=[(0.0, 0.0), (1.0, 1.0), (2.0, 1.5)])
 SPLIT = 1693526400000  # 2023-09-01
-
-
-@njit(cache=True)
-def sim(o, h, l, c, atr, sig, F, seg_s, seg_e, Hmax, tp, sl, emerg, ta, td, ind, thr, cost):
-    n = o.shape[0]
-    out_net = np.empty(n)
-    out_bars = np.empty(n)
-    out_why = np.empty(n, np.int8)
-    k = 0
-    for s in range(seg_s.shape[0]):
-        t = seg_s[s]
-        e = seg_e[s]
-        while t < e - 1:
-            if not sig[t] or np.isnan(atr[t]) or atr[t] <= 0:
-                t += 1
-                continue
-            A = atr[t]
-            en = o[t + 1]
-            tpP = en + tp * A if tp > 0 else 1e18
-            stop = en * (1 - emerg)
-            if sl > 0:
-                stop = max(stop, en - sl * A)
-            hh = en
-            px = np.nan
-            why = 0
-            last = min(t + Hmax, e - 1)
-            xi = last
-            for j in range(t + 1, last + 1):
-                if ta > 0 and hh >= en + ta * A:
-                    stop = max(stop, hh - td * A)
-                if l[j] <= stop:
-                    px = stop if j == t + 1 else min(stop, o[j])
-                    xi = j
-                    why = 1
-                    break
-                if h[j] >= tpP:
-                    px = tpP if j == t + 1 else max(tpP, o[j])
-                    xi = j
-                    why = 2
-                    break
-                hh = max(hh, h[j])
-                if ind >= 0 and F[j, ind] >= thr:
-                    px = c[j]
-                    xi = j
-                    why = 3
-                    break
-            if np.isnan(px):
-                px = c[xi]
-            out_net[k] = px / en - 1.0 - cost
-            out_bars[k] = xi - t
-            out_why[k] = why
-            k += 1
-            t = xi
-    return out_net[:k], out_bars[:k], out_why[:k]
 
 
 def load(name, uni, cut, v1):

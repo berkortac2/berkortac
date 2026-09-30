@@ -106,7 +106,49 @@ Ayrıntılar: [`bot/README.md`](../bot/README.md). Binance USDT-M futures, yaln�
 paper/testnet/canlı/replay modları. Testler: 47 güvenlik/birim + motor=backtest eşleşmesi + Chromium arayüz testi;
 bağımsız güvenlik incelemesinin 10 bulgusu düzeltildi ve regresyon testine çevrildi.
 
-## 9. Sonuç ve öneri
+## 9. AL pozisyonundan ne zaman çıkılır? (kâr al / ÇIK) — 3. tur
+
+v1'in AL girişleri sabit tutularak **3.240 çıkış politikası** denendi: en uzun tutma (12/24/48/96 mum) × ATR kâr al
+(yok/1/1.5/2/3/5) × ATR zarar kes (yok/1.5/3) × iz süren stop × gösterge çıkışı (RSI, EMA50, MACD histogram,
+Stochastic, CCI, WaveTrend, kanal üstü, DI). Hepsinde %8 acil stop var. Seçim, AL kuralının **hiç görmediği 2017–2023**
+verisi ile 2023–2026 döneminin en zayıf t-istatistiğine göre önceden belirlendi; kilitli test ve 2025 yalnızca kontrol.
+
+**Kazanan (bot, Pine ve tarayıcıda artık varsayılan):**
+- **ÇIK (kâr al): WaveTrend (wt1) ≥ 50** — fiyat tepki yükselişinde aşırı alım bölgesine gelince, mum kapanışında çık.
+- **Zarar kes: giriş anındaki ATR'nin 3 katı** (veya %8 acil stop, hangisi yakınsa).
+- **En geç 96 mum (8 saat)** sonra çık.
+
+| Dönem | Eski çıkış (24 mum + %8 stop): işlem · net/işlem · kazanma | Yeni ÇIK politikası: işlem · net/işlem · kazanma · ort. süre | Toplam kâr değişimi |
+|---|---|---|---|
+| 2017–2023 (AL kuralı hiç görmedi) | 4.575 · +%0.54 · %58.8 | 5.450 · +%0.48 · %54.0 · 27 mum | **+%5** |
+| 2023-09 → 2026-02 | 1.317 · +%0.45 · %59.9 | 1.537 · +%0.59 · %58.5 · 28 mum | **+%51** |
+| Kilitli test 2026 (36 coin) | 489 · +%0.41 · %56.9 | 543 · +%0.42 · **%63.0** · 35 mum | **+%16** |
+| Hiç kullanılmamış 10 coin, 2025 | 760 · +%0.74 · %51.6 | 884 · +%0.69 · %51.7 · 30 mum | **+%8** |
+
+- İşlemlerin %54–69'u ÇIK sinyaliyle, %29–44'ü stop ile kapanıyor. Pozisyon erken kapandığı için coin daha çabuk
+  serbest kalıyor ve biraz daha çok işlem açılıyor; coin-gün başına toplam kâr **dört dönemin dördünde** artıyor
+  (3.240 politikadan bunu başaran 16 politikadan biri).
+- Aynı AL girişleri 2017–2023'te (hiç görülmemiş veri) de işlem başı +%0.5 kazandırıyor: giriş kuralı da
+  bağımsız veride doğrulanmış oldu.
+- Bölüm 5'teki portföy simülasyonu eski çıkışla yapılmıştı; yeni çıkış her dönemde toplam kârı artırdığı için o tablo
+  ihtiyatlı kabul edilebilir.
+- Motorun ÇIK mantığı araştırma simülatörüyle birebir test edildi (`bot/tests/test_engine_replay.py`).
+
+## 10. SAT (short) araması — 3. tur
+
+| Yaklaşım | Sonuç |
+|---|---|
+| Kural araması, hedef = süre çıkışlı short getirisi (2. tur, 4 ufuk) | Eğitimde pozitif kural yok; H=48'dekiler doğrulamada zararda |
+| Kural araması, hedef = **TP/SL'li short sonucu** (TP/SL/H: 1/1/12, 1.5/1/12, 1/1.5/24, 2/2/48, 0.75/1.5/6; 2 destek seviyesi; 4 kat) | Hiçbir ayarda komisyon sonrası pozitif short kuralı çıkmadı |
+| AL kuralının aynası ("oynaklıkta aşırı yükseliş → dönüş"), 108 çıkış ayarı | 2017–2023'te en iyi hâli ≈ 0 (+%0.008), 2023–2026, kilitli test ve 2025'te **zararda** (−%0.05 … −%0.19) |
+
+**Sonuç:** 5 dakikada, %0.14 komisyon+kayma sonrası kazandıran bir SAT (short) girişi bulunamadı. Bu yüzden bot ve
+5 dk tarayıcı **sadece AL** açar; "SAT" ihtiyacını karşılayan şey **ÇIK sinyali**: AL pozisyonunu ne zaman satıp kârı
+alacağını söyler. Pine göstergesindeki SAT etiketleri yalnızca 4 saat ve 1 hafta grafiklerinde (1. tur) vardır ve
+zayıftır (4s short: eğitim coinlerinde +%0.14, görülmemiş coinlerde −%0.26/işlem); short girişi yerine
+"risk / kâr al uyarısı" olarak kullanılması önerilir.
+
+## 11. Sonuç ve öneri
 
 - 5 dk'da işe yarayan tek desen: **yüksek oynaklıkta sert düşüş sonrası kısa süreli tepki alımı (AL)**. Kârları olaylara
   bağlı; sakin aylarda küçük zararlar olur. SAT tarafı 5 dk'da komisyonu karşılamıyor.
@@ -115,4 +157,4 @@ bağımsız güvenlik incelemesinin 10 bulgusu düzeltildi ve regresyon testine 
 
 Dosyalar: `reports/deep5m_final_results.csv`, `deep5m_models.json`, `deep5m_final_trades.parquet`,
 `bot_trades_5m.parquet`, `portfolio_sim_5m.json`, `entry_study.json`, `search/trials_5m_deep.parquet`.
-Betikler: `scripts/08`–`15`.
+Betikler: `scripts/08`–`18` (çıkış: `17_exit_study.py`, SAT: `16_short_search.py`, `18_short_mirror.py`).

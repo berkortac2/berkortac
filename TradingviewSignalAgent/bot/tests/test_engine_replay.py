@@ -100,13 +100,10 @@ def test_budget_never_exceeded(tmp_path):
 
 def test_engine_exit_rule_matches_research(tmp_path):
     """Indicator exit ("ÇIK") + ATR stop + emergency stop: engine == scripts/17 simulator."""
-    import importlib.util
+    from tsa import exits as es
     raw = tsabot.REPO_ROOT / "data" / "raw"
     if not (raw / f"{SYM}_5m.parquet").exists():
         pytest.skip("research data not downloaded")
-    spec = importlib.util.spec_from_file_location("exit_study", tsabot.REPO_ROOT / "scripts" / "17_exit_study.py")
-    es = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(es)
     model = {"long": {"rules": [[["rsi7", "<=", -0.35]]], "H": 24, "tp_atr": None, "sl_atr": 3.0,
                       "exit_rules": [[["wt", ">=", 0.5]]]}, "short": {"rules": [], "H": 24}}
     d5 = pd.read_parquet(raw / f"{SYM}_5m.parquet")

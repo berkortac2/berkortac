@@ -92,9 +92,12 @@ dönemlerde düşüş %50'yi aştı. Ayrıntı: [`../reports/SONUCLAR_5DK_BOT.md
 1. Her **5 dakikalık mum kapanışında** (+3 sn) izlenen paritelerin son 1200 mumu ve 1 saatlik mumları alınır.
 2. Araştırmadaki özellik kodunun **aynısı** ile göstergeler hesaplanır (RSI, MACD, ADX/DI, ATR,
    korelasyonlar, 1 saatlik bağlam …) ve model kuralları kontrol edilir.
-3. Sinyal varsa ve risk kuralları izin veriyorsa **piyasa emriyle** pozisyon açılır; TP/SL borsaya
-   `algoOrder` (koşullu emir) olarak girilir; süre dolunca (H mum) piyasa emriyle kapatılır.
-4. Tüm işlemler, komisyonlar ve net K/Z `data/bot.db` içinde saklanır ve arayüzde görünür.
+3. Sinyal varsa ve risk kuralları izin veriyorsa **piyasa emriyle** pozisyon açılır; zarar-kes (3×ATR veya %8,
+   hangisi yakınsa) borsaya `algoOrder` (koşullu emir) olarak girilir.
+4. **ÇIK (kâr al):** her mum kapanışında WaveTrend aşırı alım bölgesine (≥ 50) geldiyse pozisyon piyasa emriyle
+   kapatılır; en geç 96 mum (8 saat) sonra da kapatılır. Bu çıkış politikası 3.240 alternatif içinden, AL kuralının
+   hiç görmediği 2017–2023 verisinde seçildi ve sonraki tüm dönemlerde toplam kârı artırdı.
+5. Tüm işlemler, komisyonlar ve net K/Z `data/bot.db` içinde saklanır ve arayüzde görünür.
 
 Replay testi, botun kayıtlı veride **araştırma backtest'iyle aynı işlemleri** açıp kapattığını doğrular
 (`tests/test_engine_replay.py`).
