@@ -172,6 +172,9 @@ class Brk:
     async def set_brackets(self, *a):
         pass
 
+    async def ensure_stop(self, *a):
+        return True
+
 
 def eng(market, broker, strat, symbols=("AAAUSDT",)):
     e = Engine(Settings(symbols=list(symbols), mode="paper"), strat, market, broker, Store(":memory:"))
@@ -247,3 +250,103 @@ def test_timestamp_error_resyncs_and_retries_once():
     c = BinanceFutures("testnet", Secret(KEY), Secret(SECRET), http=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
     assert asyncio.run(c.account())["availableBalance"] == "5"
     assert seen.count("/fapi/v3/account") == 2 and seen.count("/fapi/v1/time") == 2
+
+
+# ---------------------------------------------------------------- second review (API docs)
+class ProtBroker(Brk):
+    """ensure_stop: True = stop on the exchange, False = price already beyond it, Exception = API down."""
+
+    def __init__(self, result):
+        super().__init__()
+        self.result, self.calls = result, 0
+
+    async def ensure_stop(self, sym, d, stop, rules):
+        self.calls += 1
+        if isinstance(self.result, Exception):
+            raise self.result
+        return self.result
+
+
+def _pos(**kw):
+    return Position("AAAUSDT", 1, 1.0, 10.0, 0, 0, 96, None, 9.0, 9.2, 10.0, 0.0, 0, **kw)
+
+
+def test_missing_stop_is_retried_and_passed_stop_closes():
+    t = 1_700_000_100_000 - (1_700_000_100_000 % BAR_MS)
+    b = ProtBroker(httpx.ConnectError("down"))
+    e = eng(Mkt([t]), b, Strat())
+    e.positions["AAAUSDT"] = _pos()
+    asyncio.run(e._protect())
+    assert not e.positions["AAAUSDT"].protected and e.verify_stops      # retried next bar
+    b.result = True
+    asyncio.run(e._protect())
+    assert e.positions["AAAUSDT"].protected and not e.verify_stops
+    b2 = ProtBroker(False)                                              # price already below the stop
+    e2 = eng(Mkt([t]), b2, Strat())
+    e2.positions["AAAUSDT"] = _pos()
+    asyncio.run(e2._protect())
+    assert b2.closed == ["AAAUSDT"] and not e2.positions
+
+
+def test_pending_order_survives_a_restart(tmp_path):
+    t = 1_700_000_100_000 - (1_700_000_100_000 % BAR_MS)
+    store = Store(tmp_path / "p.db")
+
+    class Lost(Brk):
+        async def open(self, *a):
+            raise httpx.ReadTimeout("response lost")
+    e = Engine(Settings(symbols=["AAAUSDT"], mode="paper"), Strat(1), Mkt([t]), Lost(), store)
+    e.rules, e.symbols = {"AAAUSDT": RULES}, ["AAAUSDT"]
+    asyncio.run(e.on_bar())
+    assert "AAAUSDT" in e.quarantine and store.get("pending:paper")
+    b = Brk(amt=1.25)                                                   # the order did fill
+    e2 = Engine(Settings(symbols=["AAAUSDT"], mode="paper"), Strat(0), Mkt([t + BAR_MS]), b, store)
+    assert "AAAUSDT" in e2.quarantine                                  # not forgotten, not "external"
+    e2.rules, e2.symbols = {"AAAUSDT": RULES}, ["AAAUSDT"]
+    asyncio.run(e2.on_bar())
+    assert "AAAUSDT" in e2.positions and not store.get("pending:paper") and not b.opened
+
+
+def test_rate_limit_backoff_blocks_all_but_closing_orders():
+    seen = []
+
+    def handler(req: httpx.Request):
+        seen.append(req.url.path)
+        return httpx.Response(429, headers={"Retry-After": "30"}, json={"code": -1003, "msg": "Too many requests"})
+    c = BinanceFutures("testnet", Secret(KEY), Secret(SECRET), http=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    with pytest.raises(ExchangeError):
+        asyncio.run(c.klines("BTCUSDT", "5m", 5))
+    n = len(seen)
+    with pytest.raises(ExchangeError) as ei:
+        asyncio.run(c.klines("BTCUSDT", "5m", 5))
+    assert len(seen) == n and ei.value.status == 429                  # not sent while backing off
+    c.synced_at = 1e18
+    with pytest.raises(ExchangeError):
+        asyncio.run(c.market_order("BTCUSDT", "SELL", 0.01, reduce_only=True))
+    assert seen[-1] == "/fapi/v1/order"                                # a closing order still goes out
+
+
+def test_multi_assets_mode_is_refused():
+    class C(FakeClient):
+        async def dual_side(self):
+            return False
+
+        async def multi_assets(self):
+            return True
+    with pytest.raises(ExchangeError) as ei:
+        asyncio.run(broker(C()).prepare(["AAAUSDT"], 1))
+    assert "Multi-Assets" in str(ei.value)
+
+
+def test_stop_order_fires_in_a_flash_crash():
+    seen = []
+
+    def handler(req: httpx.Request):
+        seen.append(str(req.url))
+        return httpx.Response(200, json={"algoId": 1})
+    c = BinanceFutures("testnet", Secret(KEY), Secret(SECRET), http=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    c.synced_at = 1e18
+    asyncio.run(c.conditional_close("BTCUSDT", "SELL", "STOP_MARKET", 90000.0))
+    asyncio.run(c.conditional_close("BTCUSDT", "SELL", "TAKE_PROFIT_MARKET", 110000.0))
+    assert "priceProtect=false" in seen[0] and "priceProtect=true" in seen[1]
+    assert "triggerPrice=90000&" in seen[0] and "closePosition=true" in seen[0]

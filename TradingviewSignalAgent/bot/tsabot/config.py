@@ -66,6 +66,12 @@ class Settings:
                 err.append(f"{k} must be a whole number")
         if not (self.allow_long or self.allow_short):
             err.append("enable at least one direction")
+        if (isinstance(self.leverage, int) and not isinstance(self.leverage, bool) and self.leverage >= 1
+                and isinstance(self.emergency_stop_pct, (int, float))
+                and self.emergency_stop_pct >= 100 / self.leverage - 1):
+            # an isolated position is liquidated near -100/leverage %: the stop must come first
+            err.append(f"emergency_stop_pct must be below {100 / self.leverage - 1:.1f} at {self.leverage}x "
+                       "(otherwise liquidation comes before the stop)")
         return err
 
     @classmethod

@@ -32,12 +32,13 @@ SPOT_BASE = "https://api.binance.com"
 ALLOWED_HOSTS = {"fapi.binance.com", "demo-fapi.binance.com", "testnet.binancefuture.com", "api.binance.com"}
 ALLOWED = {
     ("GET", "/fapi/v1/time"), ("GET", "/fapi/v1/exchangeInfo"), ("GET", "/fapi/v1/klines"),
-    ("GET", "/fapi/v1/ticker/price"),
+    ("GET", "/fapi/v2/ticker/price"),
     ("GET", "/fapi/v3/account"), ("GET", "/fapi/v3/positionRisk"), ("GET", "/fapi/v1/positionSide/dual"),
+    ("GET", "/fapi/v1/multiAssetsMargin"),
     ("GET", "/fapi/v1/userTrades"),
     ("POST", "/fapi/v1/order"), ("GET", "/fapi/v1/order"),
     ("POST", "/fapi/v1/algoOrder"), ("DELETE", "/fapi/v1/algoOrder"),
-    ("DELETE", "/fapi/v1/algoOpenOrders"), ("GET", "/fapi/v1/openAlgoOrders"),
+    ("DELETE", "/fapi/v1/algoOpenOrders"), ("GET", "/fapi/v1/algoOpenOrders"),
     ("POST", "/fapi/v1/leverage"), ("POST", "/fapi/v1/marginType"),
     ("GET", "/sapi/v1/account/apiRestrictions"),
 }
@@ -130,6 +131,7 @@ class BinanceFutures:
         self.recv_window = recv_window
         self.offset_ms = 0
         self.synced_at = 0.0
+        self.blocked_until = 0.0
 
     @property
     def has_keys(self) -> bool:
@@ -154,9 +156,18 @@ class BinanceFutures:
                 return await self._request(method, path, params, signed, base)
             raise
 
+    def _may_pass_backoff(self, method: str, path: str, params: dict | None) -> bool:
+        """During a 429 back-off only requests that protect or close positions are sent."""
+        if (method, path) in (("POST", "/fapi/v1/algoOrder"), ("DELETE", "/fapi/v1/algoOpenOrders")):
+            return True
+        return (method, path) == ("POST", "/fapi/v1/order") and (params or {}).get("reduceOnly") == "true"
+
     async def _request(self, method: str, path: str, params: dict | None, signed: bool, base: str | None):
         method = method.upper()
         check_endpoint(method, path)
+        now = time.time()
+        if now < self.blocked_until and not self._may_pass_backoff(method, path, params):
+            raise ExchangeError(429, None, f"istek limiti: {int(self.blocked_until - now) + 1} sn bekleniyor")
         url_base = base or self.base
         if urlsplit(url_base).hostname not in ALLOWED_HOSTS:
             raise ForbiddenEndpoint(f"host {url_base} is not allowed")
@@ -173,6 +184,12 @@ class BinanceFutures:
         else:
             q = urlencode(p)
         r = await self.http.request(method, f"{url_base}{path}" + (f"?{q}" if q else ""), headers=headers)
+        if r.status_code in (418, 429):
+            try:
+                wait = float(r.headers.get("Retry-After", ""))
+            except ValueError:
+                wait = 120.0 if r.status_code == 418 else 60.0
+            self.blocked_until = time.time() + max(wait, 1.0)
         if r.status_code >= 400:
             try:
                 j = r.json()
@@ -199,7 +216,7 @@ class BinanceFutures:
                                                {"symbol": symbol, "interval": interval, "limit": limit}))
 
     async def price(self, symbol: str) -> float:
-        return float((await self.request("GET", "/fapi/v1/ticker/price", {"symbol": symbol}))["price"])
+        return float((await self.request("GET", "/fapi/v2/ticker/price", {"symbol": symbol}))["price"])
 
     # ---------------------------------------------------------------- signed
     async def api_restrictions(self) -> dict:
@@ -225,6 +242,9 @@ class BinanceFutures:
         except ExchangeError as e:
             if e.code == -4046:  # already isolated
                 return None
+            if e.code == -4168:
+                raise ExchangeError(e.status, e.code, "Hesap Multi-Assets modunda; izole marjin için Binance Futures "
+                                                      "ayarlarından Single-Asset moda geçin.") from None
             raise
 
     async def market_order(self, symbol: str, side: str, qty: float, reduce_only: bool = False,
@@ -243,8 +263,14 @@ class BinanceFutures:
             raise ValueError("only STOP_MARKET / TAKE_PROFIT_MARKET close orders are used")
         return await self.request("POST", "/fapi/v1/algoOrder", {
             "algoType": "CONDITIONAL", "symbol": symbol, "side": side, "type": kind,
-            "triggerPrice": num(trigger), "closePosition": "true",
-            "workingType": "CONTRACT_PRICE", "priceProtect": "true"}, True)
+            "triggerPrice": num(trigger), "closePosition": "true", "workingType": "CONTRACT_PRICE",
+            "priceProtect": "false" if kind == "STOP_MARKET" else "true"}, True)
+
+    async def open_conditionals(self, symbol: str) -> list[dict]:
+        return await self.request("GET", "/fapi/v1/algoOpenOrders", {"symbol": symbol}, True)
+
+    async def multi_assets(self) -> bool:
+        return bool((await self.request("GET", "/fapi/v1/multiAssetsMargin", signed=True))["multiAssetsMargin"])
 
     async def cancel_conditionals(self, symbol: str):
         try:

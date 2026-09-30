@@ -16,7 +16,7 @@ from tsabot.config import Settings
 from tsabot.exchange.binance import (ALLOWED, BinanceFutures, ExchangeError, ForbiddenEndpoint, SymbolRules,
                                      check_endpoint, sign)
 from tsabot.risk import Risk
-from tsabot.secrets import REDACT, RedactFilter, Secret, Vault
+from tsabot.secrets import RedactFilter, Secret, Vault
 
 KEY = "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789KEYKEYKEY"
 SECRET = "ZyXwVuTsRqPoNmLkJiHgFeDcBa9876543210SECRETSECRET"
@@ -35,9 +35,14 @@ def test_forbidden_endpoints(method, path):
         check_endpoint(method, path)
 
 
+# read-only account-mode query ("Multi-Assets" = margin mode, not a wallet asset); changing it is NOT allowed
+READ_ONLY_EXCEPTIONS = {("GET", "/fapi/v1/multiAssetsMargin")}
+
+
 def test_allowlist_has_no_wallet_endpoints():
-    for m, p in ALLOWED:
+    for m, p in ALLOWED - READ_ONLY_EXCEPTIONS:
         assert not re.search(r"withdraw|transfer|deposit|capital|convert|sub-?account|loan|asset", p, re.I), p
+    assert ("POST", "/fapi/v1/multiAssetsMargin") not in ALLOWED
     assert [p for m, p in ALLOWED if p.startswith("/sapi")] == ["/sapi/v1/account/apiRestrictions"]
     assert all(m == "GET" for m, p in ALLOWED if p.startswith("/sapi"))
 
@@ -118,6 +123,8 @@ def test_settings_limits():
     assert Settings(leverage=50).validate() and Settings(budget_usdt=-1).validate()
     assert Settings(max_positions=0).validate() and Settings(mode="yolo").validate()
     assert Settings(allow_long=False, allow_short=False).validate()
+    assert Settings(leverage=10, emergency_stop_pct=9.5).validate()   # liquidation would come first
+    assert not Settings(leverage=10, emergency_stop_pct=8.0).validate()
 
 
 def test_risk_budget_and_limits():
@@ -126,7 +133,7 @@ def test_risk_budget_and_limits():
     rules = SymbolRules("XUSDT", *map(__import__("decimal").Decimal, ("0.001", "0.001", "1000")),
                         __import__("decimal").Decimal("0.01"), 5.0)
     qty, margin = r.size(10.0, rules, 0.0)
-    assert qty == 5.0 and margin == pytest.approx(25.0)
+    assert qty == 4.975 and margin == pytest.approx(24.875)   # 0.5% head-room for a worse fill
     assert r.can_open([25, 25, 25], 0, 0, None)[0]
     assert not r.can_open([25, 25, 25, 25], 0, 0, None)[0]
     assert not r.can_open([], 0, -5.0, None)[0]            # daily loss limit

@@ -20,7 +20,7 @@ from .exchange.binance import ExchangeError
 from .risk import Risk
 from .secrets import REDACT
 from .store import Store
-from .strategy import Strategy
+from .strategy import Signal, Strategy
 
 log = logging.getLogger("tsabot.engine")
 DAY_MS = 86_400_000
@@ -51,6 +51,12 @@ class Position:
     rule: int
     bars_held: int = 0
     last_bar: int = 0
+    protected: bool = True       # False until the exchange confirms the closing stop order
+
+    def stop_price(self) -> float | None:
+        """The stop that is really used: the tighter of the ATR stop and the emergency stop."""
+        xs = [x for x in (self.sl, self.emergency) if x is not None]
+        return ((max if self.direction > 0 else min)(xs)) if xs else None
 
 
 class Engine:
@@ -74,7 +80,10 @@ class Engine:
         self.last_bar_ms: int | None = None
         self.status_msg = "Durduruldu"
         self.errors = 0
-        self.quarantine: dict[str, object] = {}   # symbol -> signal whose order outcome is unknown
+        # symbol -> signal whose order outcome is unknown; persisted, so a restart cannot forget it
+        self.quarantine: dict[str, Signal] = {
+            k: Signal(**{**v, "features": {}}) for k, v in (store.get(f"pending:{self.mode}", {}) or {}).items()}
+        self.verify_stops = True                  # check every exchange stop on the first bar after a start
 
     # ---------------------------------------------------------------- lifecycle
     @property
@@ -104,7 +113,7 @@ class Engine:
         self.stop_event.set()
         if self.task:
             try:
-                await asyncio.wait_for(self.task, timeout=30)
+                await asyncio.wait_for(self.task, timeout=90)
             except (asyncio.TimeoutError, asyncio.CancelledError):
                 self.task.cancel()
         self.status_msg = "Durduruldu"
@@ -130,7 +139,9 @@ class Engine:
             missing = sorted(set(self.s.symbols) - set(self.symbols))
             if missing:
                 self.emit("warn", f"Borsada işlem görmeyen / veri olmayan semboller atlandı: {missing}")
-            for w in await self.broker.prepare(self.symbols, self.s.leverage, own=set(self.positions)):
+            self.verify_stops = True
+            own = set(self.positions) | set(self.quarantine)
+            for w in await self.broker.prepare(self.symbols, self.s.leverage, own=own):
                 self.emit("warn", w)
             self.emit("info", f"Bot başladı ({self.mode}), {len(self.symbols)} USDT paritesi izleniyor, "
                               f"bütçe {self.s.budget_usdt:.2f} USDT, kaldıraç {self.s.leverage}x")
@@ -189,6 +200,7 @@ class Engine:
                 self.last_bar_ms = int(k5["open_time"].iloc[-1])
 
         await self._reconcile()
+        await self._protect()
 
         # 1) evaluate the closed bar for every coin (entry AND exit rules) -----------------------------------------------------------
         loop = asyncio.get_running_loop()
@@ -285,6 +297,7 @@ class Engine:
                 self.emit("error", f"{sym}: pozisyon durumu sorgulanamadı ({e}); sembol kilitli kalıyor")
                 continue
             del self.quarantine[sym]
+            self._persist_pending()
             if amt == 0.0:
                 self.emit("info", f"{sym}: borsada pozisyon yok, sembol serbest")
                 continue
@@ -295,14 +308,46 @@ class Engine:
             sl = entry - d * dm.sl_atr * sig.atr if dm.sl_atr else None
             emergency = entry * (1 - d * self.s.emergency_stop_pct / 100)
             self.positions[sym] = Position(sym, d, abs(amt), entry, self._now(), sig.bar_time, dm.H, tp, sl, emergency,
-                                           abs(amt) * entry / self.s.leverage, abs(amt) * entry * 0.0005, sig.rule)
+                                           abs(amt) * entry / self.s.leverage, abs(amt) * entry * 0.0005, sig.rule,
+                                           protected=False)
             self._persist()
-            try:
-                await self.broker.set_brackets(sym, d, tp, (max if d > 0 else min)(x for x in (sl, emergency) if x),
-                                               self.rules[sym])
-            except Exception as e:
-                self.emit("error", f"{sym} koruma emri verilemedi ({e})")
+            if tp:
+                try:
+                    await self.broker.set_brackets(sym, d, tp, None, self.rules[sym])
+                except Exception as e:
+                    self.emit("error", f"{sym} kâr al emri verilemedi ({e})")
             self.emit("warn", f"{sym}: yanıtı kaybolan emir borsada dolmuş, pozisyon sahiplenildi ({amt:g} @ {entry:g})")
+
+    async def _protect(self) -> None:
+        """Every bot position must have its closing stop on the exchange. Missing stops are placed again
+        each bar; if the price is already beyond the stop the position is closed at once."""
+        if self.broker.simulated:
+            return
+        all_ok = True
+        for sym, pos in list(self.positions.items()):
+            if pos.protected and not self.verify_stops:
+                continue
+            try:
+                ok = await self.broker.ensure_stop(sym, pos.direction, pos.stop_price(), self.rules[sym])
+                if ok:
+                    if not pos.protected:
+                        self.emit("info", f"{sym}: stop emri borsada kuruldu ({pos.stop_price():.6g})")
+                    pos.protected = True
+                else:
+                    px = await self.market.price(sym)
+                    await self._exit(sym, await self.broker.close(sym, pos.direction, pos.qty, px),
+                                     "Stop seviyesi geçilmişti (koruma)")
+            except Exception as e:
+                all_ok = False
+                pos.protected = False
+                self.emit("error", f"{sym}: stop emri doğrulanamadı / kurulamadı ({type(e).__name__}: {e}); "
+                                   "sonraki mumda tekrar denenecek")
+        if all_ok:
+            self.verify_stops = False
+        self._persist()
+
+    def _persist_pending(self) -> None:
+        self.store.put(f"pending:{self.mode}", {k: {**asdict(v), "features": {}} for k, v in self.quarantine.items()})
 
     async def _enter(self, sig) -> None:
         if self.stop_event.is_set():
@@ -329,12 +374,13 @@ class Engine:
             return
         if self.stop_event.is_set():
             return
+        # persisted before the order is sent: if the answer (or the whole program) is lost, the next
+        # bar / next start asks the exchange instead of forgetting or duplicating the order
+        self.quarantine[sig.symbol] = sig
+        self._persist_pending()
         try:
             fill = await self.broker.open(sig.symbol, sig.direction, qty, px, rules)
         except Exception as e:
-            # the order may have filled although the response was lost: block the symbol until
-            # the exchange confirms whether a position exists (see _reconcile)
-            self.quarantine[sig.symbol] = sig
             self.emit("error", f"{sig.symbol} emir hatası: {type(e).__name__}: {e}; borsa ile mutabakat bekleniyor")
             return
         d = sig.direction
@@ -343,14 +389,23 @@ class Engine:
         emergency = fill.price * (1 - d * self.s.emergency_stop_pct / 100)
         stop = (max if d > 0 else min)(x for x in (sl, emergency) if x is not None)
         pos = Position(sig.symbol, d, fill.qty, fill.price, self._now(), sig.bar_time, dm.H, tp, sl, emergency,
-                       fill.qty * fill.price / self.s.leverage, fill.fee, sig.rule)
+                       fill.qty * fill.price / self.s.leverage, fill.fee, sig.rule, protected=False)
         self.positions[sig.symbol] = pos
         self._persist()                      # recorded before anything else can fail
+        self.quarantine.pop(sig.symbol, None)
+        self._persist_pending()
         try:
             await self.broker.set_brackets(sig.symbol, d, tp, stop, rules)
+            pos.protected = True
+            self._persist()
         except Exception as e:
             self.emit("error", f"{sig.symbol} TP/SL emri verilemedi ({e}); pozisyon kapatılıyor")
-            await self._exit(sig.symbol, await self.broker.close(sig.symbol, d, fill.qty, fill.price), "Koruma hatası")
+            try:
+                await self._exit(sig.symbol, await self.broker.close(sig.symbol, d, fill.qty, fill.price),
+                                 "Koruma hatası")
+            except Exception as e2:          # stays unprotected -> _protect retries every bar
+                self.emit("error", f"{sig.symbol} kapatılamadı ({type(e2).__name__}: {e2}); stop her mumda "
+                                   "yeniden denenecek")
             return
         self.emit("trade", f"{sig.symbol} {'LONG' if d > 0 else 'SHORT'} açıldı: {fill.qty:g} @ {fill.price:g}, "
                            f"marjin {pos.margin:.2f} USDT" + (f", TP {tp:.6g}" if tp else "")

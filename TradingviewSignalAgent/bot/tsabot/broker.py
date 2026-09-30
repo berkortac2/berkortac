@@ -50,6 +50,9 @@ class PaperBroker:
     async def cancel_brackets(self, symbol):
         return None
 
+    async def ensure_stop(self, symbol, direction, stop, rules) -> bool:
+        return True
+
     async def closed_by_exchange(self, open_syms: dict) -> dict:
         return {}
 
@@ -69,6 +72,9 @@ class BinanceBroker:
         warns = []
         if await self.client.dual_side():
             raise ExchangeError(0, None, "Hesap Hedge Mode'da. Binance Futures ayarlarından One-way Mode'a geç.")
+        if await self.client.multi_assets():
+            raise ExchangeError(0, None, "Hesap Multi-Assets modunda; bot izole marjin kullanır. Binance Futures "
+                                         "ayarlarından Single-Asset moda geç.")
         for p in await self.client.positions():
             if float(p.get("positionAmt", 0)) != 0 and p["symbol"] in symbols and p["symbol"] not in own:
                 self.external.add(p["symbol"])
@@ -136,6 +142,21 @@ class BinanceBroker:
 
     async def cancel_brackets(self, symbol):
         await self.client.cancel_conditionals(symbol)
+
+    async def ensure_stop(self, symbol, direction, stop, rules) -> bool:
+        """Makes sure the exchange holds a closing STOP_MARKET for this position.
+        False = the price is already beyond the stop (Binance -2021): the caller must close now."""
+        side = "SELL" if direction > 0 else "BUY"
+        for o in await self.client.open_conditionals(symbol):
+            if o.get("orderType") == "STOP_MARKET" and o.get("side") == side:
+                return True
+        try:
+            await self.client.conditional_close(symbol, side, "STOP_MARKET", rules.round_price(stop))
+        except ExchangeError as e:
+            if e.code == -2021:          # "Order would immediately trigger"
+                return False
+            raise
+        return True
 
     async def position_of(self, symbol) -> tuple[float, float | None]:
         """(signed position amount, entry price) of one symbol on the exchange."""

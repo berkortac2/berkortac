@@ -41,7 +41,9 @@ class Risk:
 
     def size(self, price: float, rules: SymbolRules, realized_total: float) -> tuple[float, float]:
         """(qty, margin). qty = 0 when the per-position budget is below the exchange minimum."""
-        mpp = self.margin_per_position(realized_total)
+        # 0.5% head-room: the fill can be a little worse than the reference price and the budget
+        # is a hard cap on the margin actually used
+        mpp = self.margin_per_position(realized_total) * 0.995
         qty = rules.floor_qty(mpp * self.s.leverage / price)
         if qty <= 0 or qty * price < rules.min_notional:
             return 0.0, 0.0

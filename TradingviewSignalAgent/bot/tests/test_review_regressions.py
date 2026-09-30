@@ -16,9 +16,8 @@ from tsabot.api import create_app
 from tsabot.broker import Fill
 from tsabot.config import Settings
 from tsabot.engine import Engine
-from tsabot.exchange import binance as bx
-from tsabot.exchange.binance import BinanceFutures, SymbolRules
-from tsabot.secrets import REDACT, RedactFilter, Secret, valid_key
+from tsabot.exchange.binance import SymbolRules
+from tsabot.secrets import RedactFilter, Secret, valid_key
 from tsabot.store import Store
 from tsabot.strategy import DirModel, Signal
 
@@ -146,6 +145,10 @@ class FakeBroker:
 
     async def set_brackets(self, *a):
         self.brackets.append(a)
+
+    async def ensure_stop(self, sym, d, stop, rules):
+        self.brackets.append((sym, d, None, stop))
+        return True
 
     async def cancel_brackets(self, sym):
         return None
