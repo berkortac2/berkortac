@@ -456,9 +456,13 @@ class Controller:
                                                 "mode": self.settings.mode})
 
     async def on_shutdown(self) -> None:
-        await self.telegram.stop()
         if self.engine and self.engine.running:
             await self.engine.stop()          # "desired" stays as it is: the bot resumes next time
+        try:                                  # the "bot stopped" message still reaches the phone
+            await asyncio.wait_for(self.telegram._flush(), timeout=5)
+        except Exception:
+            pass
+        await self.telegram.stop()
 
     # ================================================================== views
     def snapshot(self) -> dict:
