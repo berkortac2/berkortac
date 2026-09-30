@@ -185,7 +185,7 @@ def generate(models: dict, stats: dict, family_label: str, strategy: bool = Fals
     head = ("//@version=6\n"
             + (f'strategy("Tradingview Signal Agent [Strateji]", shorttitle = "TSA-S", overlay = true, '
                f'initial_capital = 10000, default_qty_type = strategy.percent_of_equity, default_qty_value = 10, '
-               f'commission_type = strategy.commission.percent, commission_value = 0.05, slippage = 2, '
+               f'commission_type = strategy.commission.percent, commission_value = 0.07, slippage = 0, '
                f'pyramiding = 0, calc_on_every_tick = false, process_orders_on_close = false, '
                f'max_labels_count = 500, max_lines_count = 500)\n'
                if strategy else
@@ -265,7 +265,7 @@ i_ltf  = input.bool(false, "Grafikten dusuk TF'leri de hesapla (yavas)", group =
     rule_family = models[tfs[0]]["family"] in ("rules", "meta")
     tf_index = """
 tfIndexOf(simple int sec) =>
-    sec <= 90 ? 0 : sec <= 450 ? 1 : sec <= 1350 ? 2 : sec <= 2700 ? 3 : sec <= 7200 ? 4 : sec <= 28800 ? 5 : sec <= 259200 ? 6 : 7
+    sec == 60 ? 0 : sec == 300 ? 1 : sec == 900 ? 2 : sec == 1800 ? 3 : sec == 3600 ? 4 : sec == 14400 ? 5 : sec == 86400 ? 6 : sec == 604800 ? 7 : -1
 """
     exit_tfs = {i: models[tf]["exit_rules"] for i, tf in enumerate(TFS) if tf in models and models[tf].get("exit_rules")}
     ex_feats = sorted({c[0] for rr in exit_tfs.values() for r in rr for c in r})
@@ -349,8 +349,9 @@ if barstate.isconfirmed
             array.push(qBar, sigBar + pHd(CT, pos))
             array.push(qEnt, entry)
             array.push(qDir, pos)
-            if i_showTPSL and (pTPd(CT, pos) < 100 or pSLd(CT, pos) < 100)
+            if i_showTPSL and pTPd(CT, pos) < 100
                 line.new(bar_index, tpP, bar_index + pHd(CT, pos), tpP, color = color.new(color.green, 30), style = line.style_dashed)
+            if i_showTPSL and (pSLd(CT, pos) < 100 or pEmerg(CT) > 0)
                 line.new(bar_index, slP, bar_index + pHd(CT, pos), slP, color = color.new(color.red, 30), style = line.style_dashed)
         if pos == 1
             if low <= slP
@@ -396,8 +397,11 @@ if longSig or shortSig
     label.new(bar_index, longSig ? low : high, txt, style = longSig ? label.style_label_up : label.style_label_down,
          color = longSig ? color.new(color.teal, 0) : color.new(color.maroon, 0), textcolor = color.white, size = size.small)
     alert('{{"signal":"' + (longSig ? "BUY" : "SELL") + '","symbol":"' + syminfo.tickerid + '","tf":"' + timeframe.period
-         + '","price":' + str.tostring(close) + ',"atr":' + str.tostring(atrC) + ',"tp_atr":' + str.tostring(pTPd(CT, pos))
-         + ',"sl_atr":' + str.tostring(pSLd(CT, pos)) + ',"hold_bars":' + str.tostring(pHd(CT, pos)) + '}}', alert.freq_once_per_bar_close)
+         + '","price":' + str.tostring(close) + ',"atr":' + str.tostring(atrC)
+         + ',"tp_atr":' + (pTPd(CT, pos) < 100 ? str.tostring(pTPd(CT, pos)) : "null")
+         + ',"sl_atr":' + (pSLd(CT, pos) < 100 ? str.tostring(pSLd(CT, pos)) : "null")
+         + ',"emergency_stop_pct":' + (pEmerg(CT) > 0 ? str.tostring(pEmerg(CT) * 100) : "null")
+         + ',"hold_bars":' + str.tostring(pHd(CT, pos)) + '}}', alert.freq_once_per_bar_close)
 
 alertcondition(longSig, "TSA AL", "TSA AL sinyali: {{{{ticker}}}} {{{{interval}}}} fiyat {{{{close}}}}")
 alertcondition(shortSig, "TSA SAT", "TSA SAT sinyali: {{{{ticker}}}} {{{{interval}}}} fiyat {{{{close}}}}")
@@ -409,23 +413,37 @@ plot(sc0, "TSA skor", display = display.data_window)
     strat = """
 // ---------------------------------------------------------------- strategy orders (Strategy Tester)
 // entry at the next bar open; TP/SL in ticks relative to the real fill (active from the entry bar);
-// time exit at the close of bar t+H
+// stop = the tighter of SL x ATR and the emergency stop (price of the signal close ~ next open);
+// time exit at the close of bar t+H. Costs: 0.07% per side = 0.05% taker fee + 0.02% slippage.
+stopDist(int d) =>
+    float dist = pSLd(CT, d) < 100 ? pSLd(CT, d) * atrC : float(na)
+    if pEmerg(CT) > 0
+        dist := na(dist) ? close * pEmerg(CT) : math.min(dist, close * pEmerg(CT))
+    dist
 float tpTicksL = pTPd(CT, 1) * atrC / syminfo.mintick
-float slTicksL = pSLd(CT, 1) * atrC / syminfo.mintick
 float tpTicksS = pTPd(CT, -1) * atrC / syminfo.mintick
-float slTicksS = pSLd(CT, -1) * atrC / syminfo.mintick
+float slTicksL = stopDist(1) / syminfo.mintick
+float slTicksS = stopDist(-1) / syminfo.mintick
 if timeExit and strategy.position_size != 0
     strategy.close_all(comment = "zaman", immediately = true)
 if sigExit and strategy.position_size != 0
     strategy.close_all(comment = "CIK", immediately = true)
 if longSig
     strategy.entry("L", strategy.long)
-    if pTPd(CT, 1) < 100 or pSLd(CT, 1) < 100
+    if pTPd(CT, 1) < 100 and not na(slTicksL)
         strategy.exit("Lx", "L", profit = tpTicksL, loss = slTicksL)
+    else if pTPd(CT, 1) < 100
+        strategy.exit("Lx", "L", profit = tpTicksL)
+    else if not na(slTicksL)
+        strategy.exit("Lx", "L", loss = slTicksL)
 if shortSig
     strategy.entry("S", strategy.short)
-    if pTPd(CT, -1) < 100 or pSLd(CT, -1) < 100
+    if pTPd(CT, -1) < 100 and not na(slTicksS)
         strategy.exit("Sx", "S", profit = tpTicksS, loss = slTicksS)
+    else if pTPd(CT, -1) < 100
+        strategy.exit("Sx", "S", profit = tpTicksS)
+    else if not na(slTicksS)
+        strategy.exit("Sx", "S", loss = slTicksS)
 """
     dir_expr = ("s > 0 ? 1 : s < 0 ? -1 : 0" if rule_family
                 else "(s >= tl and s > 0) ? 1 : (s <= ts and s < 0) ? -1 : 0")
@@ -468,8 +486,8 @@ if i_table and barstate.islast
     table.cell(T, 4, {r}, na(pWin({i})) ? "-" : str.tostring(pWin({i}), "#.#") + (pOk({i}) ? "" : " !"), text_color = color.white, bgcolor = pOk({i}) ? color.new(color.black, 20) : color.new(color.orange, 30))
 """
         r += 1
-    table += f"""    table.cell(T, 0, {r}, "Bu grafik", text_color = color.white, bgcolor = color.new(color.navy, 0))
-    table.cell(T, 1, {r}, str.tostring(nTr) + " islem", text_color = color.white, bgcolor = color.new(color.navy, 0))
+    table += f"""    table.cell(T, 0, {r}, CT < 0 ? "Bu TF" : "Bu grafik", text_color = color.white, bgcolor = color.new(color.navy, 0))
+    table.cell(T, 1, {r}, CT < 0 ? "model yok: 1m 5m 15m 30m 1h 4h 1D 1W" : str.tostring(nTr) + " islem", text_color = color.white, bgcolor = CT < 0 ? color.new(color.orange, 0) : color.new(color.navy, 0))
     table.cell(T, 2, {r}, "", bgcolor = color.new(color.navy, 0))
     table.cell(T, 3, {r}, nDir > 0 ? str.tostring(100.0 * nHit / nDir, "#.#") : "-", text_color = color.white, bgcolor = color.new(color.navy, 0))
     table.cell(T, 4, {r}, nTr > 0 ? str.tostring(100.0 * nWin / nTr, "#.#") : "-", text_color = color.white, bgcolor = color.new(color.navy, 0))

@@ -51,16 +51,20 @@ arandı, bulunamadı. Hesap getirisi (1.000 USDT, 8 pozisyon, 1x; komisyon, kaym
 2. Alttaki **Pine Editor** sekmesini aç → *Open → New blank indicator* → içeriği sil.
 3. `pine/TradingviewSignalAgent.pine` dosyasının tamamını yapıştır → **Save** → **Add to chart**.
 4. Zaman dilimini 1m / 5m / 15m / 30m / 1h / 4h / 1D / 1W'den birine al; gösterge o zaman diliminin
-   kendi parametrelerini otomatik seçer.
+   kendi parametrelerini otomatik seçer. Bunların dışındaki zaman dilimlerinde (2m, 3m, 2h …) sinyal verilmez;
+   başka bir zaman diliminin modeli yanlışlıkla kullanılmasın diye tabloda "model yok" yazar.
 5. Alarm: grafikte *Alert* → Condition: **Tradingview Signal Agent** → `TSA AL` / `TSA SAT`
-   ya da "Any alert() function call" (JSON mesajı: sinyal, sembol, TF, fiyat, ATR, TP/SL çarpanı, tutma süresi).
+   / `TSA CIK` ya da "Any alert() function call". Bu alarm JSON mesajı gönderir: sinyal, sembol, TF, fiyat, ATR,
+   TP/SL çarpanı (kullanılmıyorsa `null`), acil stop %'si ve tutma süresi.
 6. Performansı TradingView içinde görmek için `pine/TradingviewSignalAgent_Strategy.pine` dosyasını
-   ayrı bir *strategy* olarak ekle ve **Strategy Tester** sekmesine bak (komisyon %0.05 ayarlı).
+   ayrı bir *strategy* olarak ekle ve **Strategy Tester** sekmesine bak. Maliyet araştırmayla aynıdır:
+   taraf başına %0.07 (%0.05 komisyon + %0.02 kayma). 5 dk'daki %8 acil stop da emre eklidir.
 
 ### Grafikte ne görürsün
 - **AL** (yeşil, mumun altında) / **SAT** (bordo, mumun üstünde) etiketleri — yalnızca **kapanmış** mumda
   (repaint yok). Aynı anda tek pozisyon: bir sinyalin işlemi (TP / SL / H mum süresi) bitmeden yeni sinyal çıkmaz.
-- Kesikli yeşil/kırmızı çizgiler: ATR tabanlı TP ve SL seviyeleri (ayar: *TP / SL seviyelerini çiz*).
+- Kesikli yeşil/kırmızı çizgiler: ATR tabanlı TP ve stop seviyeleri (ayar: *TP / SL seviyelerini çiz*).
+  Yalnızca kullanılan seviye çizilir; 5 dk'da TP yoktur, kırmızı çizgi 3×ATR ile %8 arasında fiyata yakın olan stoptur.
 - Sağ üstte **çoklu zaman dilimi tablosu**: her TF için anlık yön (AL / SAT / –), model skoru,
   kilitli testteki yön isabeti % ve işlem kazanma %, en altta **bu grafikte** geçmişteki canlı isabet.
 - *Sadece kilitli testte kârlı çıkan TF'lerde sinyal ver* (varsayılan açık): 15 dk ve 1 gün testte zarar ettiği

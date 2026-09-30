@@ -208,7 +208,7 @@ pTPd(simple int tfi, int d) => d < 0 ? pTPs(tfi) : pTP(tfi)
 pSLd(simple int tfi, int d) => d < 0 ? pSLs(tfi) : pSL(tfi)
 
 tfIndexOf(simple int sec) =>
-    sec <= 90 ? 0 : sec <= 450 ? 1 : sec <= 1350 ? 2 : sec <= 2700 ? 3 : sec <= 7200 ? 4 : sec <= 28800 ? 5 : sec <= 259200 ? 6 : 7
+    sec == 60 ? 0 : sec == 300 ? 1 : sec == 900 ? 2 : sec == 1800 ? 3 : sec == 3600 ? 4 : sec == 14400 ? 5 : sec == 86400 ? 6 : sec == 604800 ? 7 : -1
 
 f_model(simple int tfi) =>
     float atr14 = ta.atr(14)
@@ -361,8 +361,9 @@ if barstate.isconfirmed
             array.push(qBar, sigBar + pHd(CT, pos))
             array.push(qEnt, entry)
             array.push(qDir, pos)
-            if i_showTPSL and (pTPd(CT, pos) < 100 or pSLd(CT, pos) < 100)
+            if i_showTPSL and pTPd(CT, pos) < 100
                 line.new(bar_index, tpP, bar_index + pHd(CT, pos), tpP, color = color.new(color.green, 30), style = line.style_dashed)
+            if i_showTPSL and (pSLd(CT, pos) < 100 or pEmerg(CT) > 0)
                 line.new(bar_index, slP, bar_index + pHd(CT, pos), slP, color = color.new(color.red, 30), style = line.style_dashed)
         if pos == 1
             if low <= slP
@@ -408,8 +409,11 @@ if longSig or shortSig
     label.new(bar_index, longSig ? low : high, txt, style = longSig ? label.style_label_up : label.style_label_down,
          color = longSig ? color.new(color.teal, 0) : color.new(color.maroon, 0), textcolor = color.white, size = size.small)
     alert('{"signal":"' + (longSig ? "BUY" : "SELL") + '","symbol":"' + syminfo.tickerid + '","tf":"' + timeframe.period
-         + '","price":' + str.tostring(close) + ',"atr":' + str.tostring(atrC) + ',"tp_atr":' + str.tostring(pTPd(CT, pos))
-         + ',"sl_atr":' + str.tostring(pSLd(CT, pos)) + ',"hold_bars":' + str.tostring(pHd(CT, pos)) + '}', alert.freq_once_per_bar_close)
+         + '","price":' + str.tostring(close) + ',"atr":' + str.tostring(atrC)
+         + ',"tp_atr":' + (pTPd(CT, pos) < 100 ? str.tostring(pTPd(CT, pos)) : "null")
+         + ',"sl_atr":' + (pSLd(CT, pos) < 100 ? str.tostring(pSLd(CT, pos)) : "null")
+         + ',"emergency_stop_pct":' + (pEmerg(CT) > 0 ? str.tostring(pEmerg(CT) * 100) : "null")
+         + ',"hold_bars":' + str.tostring(pHd(CT, pos)) + '}', alert.freq_once_per_bar_close)
 
 alertcondition(longSig, "TSA AL", "TSA AL sinyali: {{ticker}} {{interval}} fiyat {{close}}")
 alertcondition(shortSig, "TSA SAT", "TSA SAT sinyali: {{ticker}} {{interval}} fiyat {{close}}")
@@ -510,8 +514,8 @@ if i_table and barstate.islast
     table.cell(T, 2, 8, na(s7) ? "-" : str.tostring(s7, "#.##"), text_color = color.white, bgcolor = color.new(color.black, 20))
     table.cell(T, 3, 8, na(pDirHit(7)) ? "-" : str.tostring(pDirHit(7), "#.#"), text_color = color.white, bgcolor = color.new(color.black, 20))
     table.cell(T, 4, 8, na(pWin(7)) ? "-" : str.tostring(pWin(7), "#.#") + (pOk(7) ? "" : " !"), text_color = color.white, bgcolor = pOk(7) ? color.new(color.black, 20) : color.new(color.orange, 30))
-    table.cell(T, 0, 9, "Bu grafik", text_color = color.white, bgcolor = color.new(color.navy, 0))
-    table.cell(T, 1, 9, str.tostring(nTr) + " islem", text_color = color.white, bgcolor = color.new(color.navy, 0))
+    table.cell(T, 0, 9, CT < 0 ? "Bu TF" : "Bu grafik", text_color = color.white, bgcolor = color.new(color.navy, 0))
+    table.cell(T, 1, 9, CT < 0 ? "model yok: 1m 5m 15m 30m 1h 4h 1D 1W" : str.tostring(nTr) + " islem", text_color = color.white, bgcolor = CT < 0 ? color.new(color.orange, 0) : color.new(color.navy, 0))
     table.cell(T, 2, 9, "", bgcolor = color.new(color.navy, 0))
     table.cell(T, 3, 9, nDir > 0 ? str.tostring(100.0 * nHit / nDir, "#.#") : "-", text_color = color.white, bgcolor = color.new(color.navy, 0))
     table.cell(T, 4, 9, nTr > 0 ? str.tostring(100.0 * nWin / nTr, "#.#") : "-", text_color = color.white, bgcolor = color.new(color.navy, 0))

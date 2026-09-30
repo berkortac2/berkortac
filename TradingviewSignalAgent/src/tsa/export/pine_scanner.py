@@ -194,7 +194,7 @@ scan() =>
     float sig = L ? 1.0 : S ? -1.0 : 0.0
     float xf = X ? 1.0 : 0.0
     // previous (closed) candle + lookahead_on in the caller = no repaint
-    [sig[1], float(time[1]), close[1], xf[1], low[1], high[1], atr14[1]]
+    [sig[1], float(time[1]), close[1], xf[1], low[1], high[1], atr14[1], open[1]]
 
 grp = "Coinler (Binance USDT-M perpetual, en fazla 39)"
 i_exitKeep = input.int(12, "CIK tabloda kac mum kalsin", minval = 1, group = "Tablo")
@@ -209,38 +209,51 @@ i_useX = input.bool(true, "CIK sinyali (WaveTrend asiri alim) ile kar al", group
         out.append(f'sym{i:02d} = input.symbol("BINANCE:{c}.P", "{i + 1}", group = grp, inline = "c{i // 3}")')
     out.append("")
     for i in range(n):
-        out.append(f"[g{i:02d}, t{i:02d}, p{i:02d}, x{i:02d}, lo{i:02d}, hi{i:02d}, a{i:02d}] = request.security("
+        out.append(f"[g{i:02d}, t{i:02d}, p{i:02d}, x{i:02d}, lo{i:02d}, hi{i:02d}, a{i:02d}, o{i:02d}] = request.security("
                    f"sym{i:02d}, \"5\", scan(), lookahead = barmerge.lookahead_on)")
     out.append(f"""
 var array<string> names = array.new<string>({n}, "")
 var array<int> dirA = array.new<int>({n}, 0)          // open position: 1 AL, -1 SAT, 0 none
 var array<float> entA = array.new<float>({n}, na)
 var array<float> stopA = array.new<float>({n}, na)
+var array<float> atrA = array.new<float>({n}, na)       // ATR of the signal candle (stop distance)
 var array<int> barsA = array.new<int>({n}, 0)
 var array<float> lastPx = array.new<float>({n}, na)
 var array<float> lastT = array.new<float>({n}, na)
 var array<int> exitBar = array.new<int>({n}, -100000)
 var array<float> exitNet = array.new<float>({n}, na)
 var array<int> entBar = array.new<int>({n}, -100000)
-upd(int i, string sym, float g, float t, float p, float x, float lo, float hi, float a) =>
+upd(int i, string sym, float g, float t, float p, float x, float lo, float hi, float a, float o) =>
     string nm = str.replace(str.replace(sym, "BINANCE:", ""), ".P", "")
     array.set(names, i, nm)
     string res = ""
     float prevT = array.get(lastT, i)
-    // one decision per NEW closed 5m candle of that coin (same order as the bot: stop, CIK, time, then entry)
+    // one decision per NEW closed 5m candle of that coin, same rules as the research / bot:
+    // entry at the open of the candle after the signal, then stop (gaps fill at the open), CIK, time; then entry
     if not na(t) and (na(prevT) or t != prevT)
         array.set(lastT, i, t)
         array.set(lastPx, i, p)
         int d = array.get(dirA, i)
         if d != 0
+            if na(array.get(entA, i))
+                // first candle of the position: the entry is its open, the stop is set from there
+                float e0 = o
+                float sa = array.get(atrA, i)
+                float stp = i_em > 0 ? e0 * (1 - d * i_em / 100) : float(na)
+                if i_sl > 0 and not na(sa)
+                    float s2 = e0 - d * i_sl * sa
+                    stp := na(stp) ? s2 : d > 0 ? math.max(stp, s2) : math.min(stp, s2)
+                array.set(entA, i, e0)
+                array.set(stopA, i, stp)
             array.set(barsA, i, array.get(barsA, i) + 1)
             float en = array.get(entA, i)
             float st = array.get(stopA, i)
+            bool first = array.get(barsA, i) == 1
             float px = na
-            if d > 0 and lo <= st
-                px := st
-            else if d < 0 and hi >= st
-                px := st
+            if d > 0 and not na(st) and lo <= st
+                px := first ? st : math.min(st, o)
+            else if d < 0 and not na(st) and hi >= st
+                px := first ? st : math.max(st, o)
             else if d > 0 and i_useX and x > 0
                 px := p
             else if array.get(barsA, i) >= i_H
@@ -253,35 +266,51 @@ upd(int i, string sym, float g, float t, float p, float x, float lo, float hi, f
                 res += "X:" + nm + " (" + str.tostring(net * 100, "#.##") + "%),"
         if array.get(dirA, i) == 0 and g != 0
             int nd = g > 0 ? 1 : -1
-            float stp = nd > 0 ? p * (1 - i_em / 100) : p * (1 + i_em / 100)
-            if i_sl > 0 and not na(a)
-                stp := nd > 0 ? math.max(stp, p - i_sl * a) : math.min(stp, p + i_sl * a)
             array.set(dirA, i, nd)
-            array.set(entA, i, p)
-            array.set(stopA, i, stp)
+            array.set(entA, i, na)          // filled at the next candle's open
+            array.set(stopA, i, na)
+            array.set(atrA, i, a)
             array.set(barsA, i, 0)
             array.set(entBar, i, bar_index)
             res += (nd > 0 ? "L:" : "S:") + nm + ","
     res
 """)
     for i in range(n):
-        out.append(f"r{i:02d} = upd({i}, sym{i:02d}, g{i:02d}, t{i:02d}, p{i:02d}, x{i:02d}, lo{i:02d}, hi{i:02d}, a{i:02d})")
+        out.append(f"r{i:02d} = upd({i}, sym{i:02d}, g{i:02d}, t{i:02d}, p{i:02d}, x{i:02d}, lo{i:02d}, hi{i:02d}, "
+                   f"a{i:02d}, o{i:02d})")
     out.append("string fired = " + " + ".join(f"r{i:02d}" for i in range(n)))
     out.append(f"""
 // ---------------------------------------------------------------- alert + table
+// coins' candles can arrive on different ticks of the chart bar; `var` state is rolled back on every
+// realtime tick, so `fired` repeats earlier coins. varip remembers what was already sent in this bar.
+varip string sentKeys = ""
+varip int sentBarT = na
 string alL = ""
 string alS = ""
 string alX = ""
+string nwL = ""
+string nwS = ""
+string nwX = ""
+if barstate.isrealtime and (na(sentBarT) or time != sentBarT)
+    sentKeys := ""
+    sentBarT := time
 for part in str.split(fired, ",")
-    if str.startswith(part, "L:")
-        alL += (alL == "" ? "" : ", ") + str.substring(part, 2)
-    else if str.startswith(part, "S:")
-        alS += (alS == "" ? "" : ", ") + str.substring(part, 2)
-    else if str.startswith(part, "X:")
-        alX += (alX == "" ? "" : ", ") + str.substring(part, 2)
-bool anyNew = alL != "" or alS != "" or alX != ""
-if anyNew and barstate.isrealtime
-    alert("TSA 5m" + (alL != "" ? " | AL: " + alL : "") + (alS != "" ? " | SAT: " + alS : "") + (alX != "" ? " | ÇIK: " + alX : ""), alert.freq_once_per_bar)
+    if part != ""
+        bool isNew = barstate.isrealtime and not str.contains(sentKeys, "|" + part + "|")
+        if isNew
+            sentKeys += "|" + part + "|"
+        string nm = str.substring(part, 2)
+        if str.startswith(part, "L:")
+            alL += (alL == "" ? "" : ", ") + nm
+            nwL += isNew ? (nwL == "" ? "" : ", ") + nm : ""
+        else if str.startswith(part, "S:")
+            alS += (alS == "" ? "" : ", ") + nm
+            nwS += isNew ? (nwS == "" ? "" : ", ") + nm : ""
+        else if str.startswith(part, "X:")
+            alX += (alX == "" ? "" : ", ") + nm
+            nwX += isNew ? (nwX == "" ? "" : ", ") + nm : ""
+if nwL != "" or nwS != "" or nwX != ""
+    alert("TSA 5m" + (nwL != "" ? " | AL: " + nwL : "") + (nwS != "" ? " | SAT: " + nwS : "") + (nwX != "" ? " | ÇIK: " + nwX : ""), alert.freq_all)
 alertcondition(alL != "" or alS != "", "TSA tarayici: yeni AL/SAT", "TSA 5m tarayici yeni AL/SAT sinyali verdi")
 alertcondition(alX != "", "TSA tarayici: CIK (kar al)", "TSA 5m tarayici: bir AL pozisyonu icin CIK zamani")
 plotshape(alL != "", "Yeni AL", shape.triangleup, location.bottom, color.teal, display = display.data_window)
@@ -306,13 +335,13 @@ if barstate.islast
         nAct += d != 0 ? 1 : 0
         if d != 0 or xNew or not i_onlyActive
             float en = array.get(entA, i)
-            float kz = d != 0 ? d * (array.get(lastPx, i) / en - 1.0) * 100 : xNew ? array.get(exitNet, i) * 100 : float(na)
+            float kz = d != 0 and not na(en) ? d * (array.get(lastPx, i) / en - 1.0) * 100 : xNew ? array.get(exitNet, i) * 100 : float(na)
             string st = d > 0 ? "AL" : d < 0 ? "SAT" : xNew ? "ÇIK" : "-"
             color bg = d > 0 ? color.teal : d < 0 ? color.maroon : xNew ? color.orange : color.new(color.black, 20)
             table.cell(T, 0, row, array.get(names, i), text_color = color.white, bgcolor = color.new(color.black, 20), text_size = size.small)
             table.cell(T, 1, row, st, text_color = color.white, bgcolor = bg, text_size = size.small)
             table.cell(T, 2, row, d != 0 ? str.tostring(array.get(barsA, i)) : xNew ? str.tostring(sinceX) : "", text_color = color.white, bgcolor = color.new(color.black, 20), text_size = size.small)
-            table.cell(T, 3, row, d != 0 ? str.tostring(en, format.mintick) : "", text_color = color.white, bgcolor = color.new(color.black, 20), text_size = size.small)
+            table.cell(T, 3, row, d != 0 and not na(en) ? str.tostring(en) : d != 0 ? "..." : "", text_color = color.white, bgcolor = color.new(color.black, 20), text_size = size.small)
             table.cell(T, 4, row, na(kz) ? "" : str.tostring(kz, "#.##"), text_color = color.white, bgcolor = na(kz) ? color.new(color.black, 20) : kz >= 0 ? color.new(color.green, 40) : color.new(color.red, 40), text_size = size.small)
             row += 1
     table.cell(T, 0, row, timeframe.period == "5" ? str.tostring(nAct) + " acik AL" : "5 dk grafik kullanin!", text_color = color.white, bgcolor = timeframe.period == "5" ? color.navy : color.orange, text_size = size.small)

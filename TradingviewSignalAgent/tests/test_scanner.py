@@ -40,3 +40,53 @@ def test_scanner_code_limits():
     for n, pos in zip(names, defs):
         first_call = re.search(rf"(?<![\w.]){n}\(", code[:pos])
         assert first_call is None, n
+
+
+def scanner_port(o, h, l, c, atr, sig, x, H, sl, em):
+    """Line-by-line Python port of the scanner's upd() for one coin (AL only)."""
+    d, en, st, bars, a_sig, nets = 0, np.nan, np.nan, 0, np.nan, []
+    for k in range(len(o)):                     # candle k has just closed
+        if d != 0:
+            if np.isnan(en):                    # entry = open of the candle after the signal
+                en = o[k]
+                st = en * (1 - em) if em > 0 else np.nan
+                if sl > 0 and not np.isnan(a_sig):
+                    s2 = en - sl * a_sig
+                    st = s2 if np.isnan(st) else max(st, s2)
+            bars += 1
+            px = np.nan
+            if not np.isnan(st) and l[k] <= st:
+                px = st if bars == 1 else min(st, o[k])
+            elif x[k] > 0:
+                px = c[k]
+            elif bars >= H:
+                px = c[k]
+            if not np.isnan(px):
+                nets.append(px / en - 1.0 - 0.0014)
+                d = 0
+        if d == 0 and sig[k]:
+            d, en, st, a_sig, bars = 1, np.nan, np.nan, atr[k], 0
+    return np.array(nets)
+
+
+def test_scanner_position_logic_equals_research_simulator():
+    if not (RAW / "NEARUSDT_5m.parquet").exists():
+        pytest.skip("data not downloaded")
+    from tsa import exits as es
+    from tsa.indicators import pine_ta as ta
+    d5 = pd.read_parquet(RAW / "NEARUSDT_5m.parquet").iloc[-30000:].reset_index(drop=True)
+    d1 = pd.read_parquet(RAW / "NEARUSDT_1h.parquet")
+    f = compute_features(d5, "5m", d1)
+    o, h, l, c = (d5[k].to_numpy() for k in ("open", "high", "low", "close"))
+    atr = ta.atr(h, l, c, 14)
+    sig = (f["rsi7"].to_numpy() <= -0.35) & np.isfinite(atr)          # frequent rule -> many trades
+    sig[:200] = False
+    x = (f["wt"].fillna(0).to_numpy() >= 1.0).astype(float)
+    F = np.ascontiguousarray(f[es.EXIT_FEATS].fillna(0).to_numpy(np.float64))
+    ref, _, _ = es.sim(o, h, l, c, atr, sig, F, np.array([0]), np.array([len(o)]), 96, 0.0, 3.0, 0.08,
+                       0.0, 0.0, es.EXIT_FEATS.index("wt"), 1.0, 0.0014)
+    got = scanner_port(o, h, l, c, atr, sig, x, 96, 3.0, 0.08)
+    assert len(ref) > 100
+    k = min(len(ref), len(got))
+    assert abs(len(ref) - len(got)) <= 1                             # last trade may be open
+    assert np.max(np.abs(ref[:k] - got[:k])) < 1e-12
