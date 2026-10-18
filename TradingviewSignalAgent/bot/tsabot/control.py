@@ -90,6 +90,14 @@ class Controller:
     def replay_available(self) -> bool:
         return (REPO_ROOT / "data" / "raw" / "BTCUSDT_5m.parquet").exists()
 
+    def power(self) -> dict:
+        """Desktop app on Windows: mains / battery and whether the computer is kept awake right now."""
+        from . import winsys
+        if not (self.desktop and winsys.IS_WIN):
+            return {"ac": None, "battery": None, "awake": None}
+        return {**winsys.power_status(), "awake": winsys.awake_state()["on"],
+                "prevent_sleep": self.app_prefs.prevent_sleep}
+
     def app_info(self) -> dict:
         from . import __version__
         return {"desktop": self.desktop, "platform": sys.platform, "version": __version__,
@@ -485,8 +493,9 @@ class Controller:
                     "last_bar": None, "price_ts": None, "now": self.now_ms(), "symbols": len(s.symbols),
                     "leverage": s.leverage,
                     "max_positions": s.max_positions, "emergency_stop_pct": s.emergency_stop_pct, "external": [],
-                    "net": {}, "stats": self.store.stats(m)}
+                    "net": {}, "scan": None, "stats": self.store.stats(m)}
         snap["keys"] = {"unlocked": self.keys is not None, "source": self.keys_source}
+        snap["power"] = self.power()
         snap["telegram"] = {"paired": self.tg_prefs.chat_id is not None, "status": self.telegram.status}
         return snap
 

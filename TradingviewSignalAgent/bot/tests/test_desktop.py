@@ -73,6 +73,7 @@ class Ctl:
     def __init__(self, positions=0):
         self.app_prefs = AppPrefs()
         self.hooks = []
+        self.prefs_hooks = []
         self.n = positions
         self.started, self.stopped = 0, 0
 

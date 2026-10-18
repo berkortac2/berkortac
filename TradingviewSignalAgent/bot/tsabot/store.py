@@ -28,6 +28,7 @@ class Store:
             CREATE TABLE IF NOT EXISTS kv(k TEXT PRIMARY KEY, v TEXT);
             CREATE INDEX IF NOT EXISTS trades_exit ON trades(mode, exit_time);
             CREATE INDEX IF NOT EXISTS equity_ts ON equity(mode, ts);
+            CREATE INDEX IF NOT EXISTS events_ts ON events(ts);
             """)
             cols = {r[1] for r in self.db.execute("PRAGMA table_info(equity)")}
             for c in ("budget", "pnl"):                      # added in 1.1 (budget chart)
@@ -85,6 +86,21 @@ class Store:
     def events(self, limit: int = 100) -> list[dict]:
         cur = self._x("SELECT ts, level, msg FROM events ORDER BY id DESC LIMIT ?", (limit,))
         return [{"ts": a, "level": b, "msg": c} for a, b, c in cur.fetchall()]
+
+    def event_counts(self, since_ms: int) -> dict:
+        cur = self._x("SELECT level, COUNT(*) FROM events WHERE ts>=? GROUP BY level", (since_ms,))
+        return {a: int(b) for a, b in cur.fetchall()}
+
+    def last_event(self, level: str, since_ms: int = 0) -> dict | None:
+        r = self._x("SELECT ts, msg FROM events WHERE level=? AND ts>=? ORDER BY ts DESC, id DESC LIMIT 1",
+                    (level, since_ms)).fetchone()
+        return {"ts": r[0], "msg": r[1]} if r else None
+
+    def opened_since(self, mode: str, since_ms: int) -> int:
+        """Closed trades that were opened at / after since_ms (open positions are counted by the engine)."""
+        r = self._x("SELECT COUNT(*) FROM trades WHERE mode=? AND exit_time>=? AND entry_time>=?",
+                    (mode, since_ms, since_ms)).fetchone()
+        return int(r[0])
 
     def add_equity(self, ts: int, mode: str, equity: float, realized: float, budget: float | None = None,
                    pnl: float | None = None) -> None:

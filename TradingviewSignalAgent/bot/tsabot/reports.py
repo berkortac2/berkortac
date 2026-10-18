@@ -93,6 +93,9 @@ def report(snap: dict, now_ms: int, today: dict) -> str:
              f"{dot(unreal)} Açık pozisyonlar: <b>{money(unreal)}</b>",
              f"{dot(real_today + unreal)} Toplam: <b>{money(real_today + unreal)}</b>",
              f"Bütçe dönemi toplamı: {money(snap.get('realized_period'))}"]
+    sl = scan_line(snap, now_ms)
+    if sl:
+        lines += ["", sl]
     lines += ["", f"<b>Açık pozisyonlar ({len(pos)})</b>"]
     if pos:
         lines += [position_line(p, now_ms) for p in sorted(pos, key=lambda p: -(p.get("unrealized") or 0))]
@@ -101,6 +104,42 @@ def report(snap: dict, now_ms: int, today: dict) -> str:
     if snap.get("external"):
         lines += ["", "Bot dokunmuyor (senin pozisyonların): " + escape(", ".join(snap["external"]))]
     return "\n".join(lines)
+
+
+SCAN_LATE_MS = 11 * 60_000
+
+
+def scan_line(snap: dict, now_ms: int) -> str | None:
+    """Is the bot really scanning? Last scan, coins, today's signals and what became of them."""
+    sc = snap.get("scan")
+    if not sc or snap.get("state") == "stopped":
+        return None
+    if not sc.get("last_ms"):
+        head = "🔎 Tarama: ilk tarama bir sonraki 5 dk mum kapanışında"
+    else:
+        age = (now_ms - int(sc["last_ms"])) / 60000
+        late = now_ms - int(sc["last_ms"]) > SCAN_LATE_MS
+        head = (f"{'⚠️' if late else '🔎'} Son tarama: {local(sc['last_ms'], '%H:%M')} ({duration(age)} önce) · "
+                f"{sc.get('coins', 0)} coin")
+        if late:
+            head += "\n<b>Tarama gecikti</b>: bilgisayar uykuda / program donmuş ya da bağlantı kopmuş olabilir."
+    today = (f"Bugün: {sc.get('signals_today', 0)} sinyal · {sc.get('opened_today', 0)} pozisyon açıldı · "
+             f"{sc.get('skipped_today', 0)} atlandı")
+    if sc.get("skipped_today") and sc.get("last_skip"):
+        today += f"\nSon atlanan: {escape(str(sc['last_skip']))}"
+    return head + "\n" + today
+
+
+def gap(data: dict) -> str:
+    """Notification: the bot could not scan for a while (sleeping computer, frozen program, power cut)."""
+    mins = int(data.get("minutes") or 0)
+    span = f"{local(data.get('since'), '%H:%M')} – {local(data.get('until'), '%H:%M')}"
+    if data.get("cause") == "down":
+        return (f"⏸ Bot {duration(mins)} çalışmadı ({span}). Program ya da bilgisayar kapanmış olabilir; bu "
+                "sürede gelen sinyaller kaçırıldı. Bot şimdi yeniden çalışıyor.")
+    return (f"😴 Bot {duration(mins)} boyunca tarama yapamadı ({span}). Bilgisayar uykuya geçmiş ya da program "
+            "donmuş olabilir; bu sürede gelen sinyaller kaçırıldı. Tarama devam ediyor.\n"
+            "Önlem: Windows güç ayarlarında uykuyu kapat (fişe takılıyken: Hiçbir zaman) ve bilgisayarı şarja tak.")
 
 
 def positions(snap: dict, now_ms: int) -> str:

@@ -244,6 +244,33 @@ def test_start_and_close_positions_by_hand(ui):
     assert page.evaluate("window.__xss === undefined")
 
 
+def test_scan_strip_and_sleep_warnings(ui):
+    app, page, base, errors = ui
+    eng = app.state.tsa.engine
+    go(page, "panel")
+    expect(page.locator("#scan-bar")).to_have_class(re.compile(r"\bok\b"))
+    expect(page.locator("#scan-main")).to_contain_text("coin tarandı")
+    expect(page.locator("#scan-today")).to_contain_text(re.compile(r"Bugün: \d+ sinyal · \d+ pozisyon açıldı · \d+ atlandı"))
+    expect(page.locator("#scan-alert")).to_be_hidden()
+    # the computer slept: a gap was detected
+    eng.last_gap = {"minutes": 47, "since": eng._now() - 50 * 60_000, "until": eng._now() - 3 * 60_000, "cause": "sleep"}
+    expect(page.locator("#scan-alert")).to_be_visible()
+    expect(page.locator("#scan-alert-text")).to_contain_text("47 dk boyunca tarama yapamadı")
+    # scanning is late right now (frozen / asleep): red strip. The replay keeps scanning, so the view is pinned.
+    real = eng.scan_view
+    eng.scan_view = lambda: {**real(), "last_ms": eng._now() - 30 * 60_000, "realtime": True}
+    try:
+        expect(page.locator("#scan-bar")).to_have_class(re.compile(r"\blate\b"))
+        expect(page.locator("#scan-alert")).to_have_class(re.compile(r"\bbad\b"))
+        expect(page.locator("#scan-alert-text")).to_contain_text("Son tarama")
+        page.evaluate("window.scrollTo(0, 0); document.querySelector('main').scrollTo(0, 0)")
+        page.screenshot(path=str(OUT / "scan_late.png"), clip={"x": 0, "y": 0, "width": 1440, "height": 330})
+    finally:
+        del eng.scan_view
+        eng.last_gap = None
+    expect(page.locator("#scan-alert")).to_be_hidden()
+
+
 def test_stop_modes_resume_and_panic(ui):
     app, page, base, errors = ui
     st = app.state.tsa

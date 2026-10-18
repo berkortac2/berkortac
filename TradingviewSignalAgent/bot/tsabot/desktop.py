@@ -145,6 +145,10 @@ class DesktopShell:
         self.state = "stopped"
         self.confirm = confirm
         self.done = threading.Event()
+        # registered before the server starts: a bot resumed at start-up must already reach the tray icon
+        # and the keep-awake request
+        self.ctl.hooks.append(self.on_event)
+        self.ctl.prefs_hooks.append(lambda prefs: self.apply_awake())
 
     @property
     def ctl(self):
@@ -255,18 +259,19 @@ class DesktopShell:
 
     def on_event(self, kind: str, data: dict):
         """Controller hook (runs in the bot's thread)."""
-        from . import winsys
         from .reports import money
         prefs = self.ctl.app_prefs
         if kind == "state":
             self.state = data.get("state", "stopped")
-            if prefs.prevent_sleep:
-                winsys.keep_awake(self.state in ("running", "draining", "starting"))
+            self.apply_awake()
             self.refresh_icon()
         elif kind == "stopped":
             self.state = "stopped"
-            winsys.keep_awake(False)
+            self.apply_awake()
             self.refresh_icon()
+        elif kind == "gap":
+            self.notify(f"Bot {data.get('minutes')} dk tarama yapamadı (bilgisayar uyumuş olabilir). "
+                        "Şimdi devam ediyor.")
         elif kind == "trade_open" and prefs.notify_desktop:
             self.notify(f"{data['symbol']} {'LONG' if data['direction'] > 0 else 'SHORT'} açıldı · marjin "
                         f"{data['margin']:.2f} $")
@@ -285,6 +290,21 @@ class DesktopShell:
             return f"{st} · {n} pozisyon" + (f" · {u:+.2f} $" if n else "")
         except Exception:
             return "Durum bilinmiyor"
+
+    def apply_awake(self) -> bool:
+        """Keep the computer awake exactly while the bot runs (and the user wants it)."""
+        from . import winsys
+        want = bool(self.ctl.app_prefs.prevent_sleep) and self.state in ("running", "draining", "starting")
+        return winsys.keep_awake(want)
+
+    def sync_state(self) -> None:
+        """Re-reads the bot state, so a missed event can never leave the icon or keep-awake wrong."""
+        eng = getattr(self.ctl, "engine", None)
+        st = getattr(eng, "state", "stopped") if eng is not None else "stopped"
+        if st != self.state:
+            self.state = st
+            self.refresh_icon()
+        self.apply_awake()
 
     def refresh_icon(self):
         if self.icon is None:
@@ -327,8 +347,10 @@ class DesktopShell:
         return self.tray_ok
 
     def watch_show_requests(self, flag: Path):
-        """A second start of the app drops a file here: bring the window to the front."""
+        """A second start of the app drops a file here: bring the window to the front.
+        The same loop re-syncs the bot state every 15 s (tray icon, keep-awake)."""
         def loop():
+            n = 0
             while not self.done.is_set():
                 if flag.exists():
                     try:
@@ -336,13 +358,19 @@ class DesktopShell:
                     except OSError:
                         pass
                     self.show()
+                n += 1
+                if n % 15 == 0:
+                    try:
+                        self.sync_state()
+                    except Exception as e:
+                        log.warning("state sync failed: %s", e)
                 self.done.wait(1.0)
         threading.Thread(target=loop, name="tsabot-show", daemon=True).start()
 
     # ---------------------------------------------------------- main loop
     def run(self, fragment: str = "", after=None) -> None:
         """Blocks until the app quits. `after` (optional) runs in a thread once the window exists."""
-        self.ctl.hooks.append(self.on_event)
+        self.sync_state()
         self.start_tray()
         wv = self.webview
         if wv is not None:
@@ -465,6 +493,24 @@ def selftest(data_dir: Path) -> int:
         if p.available:
             assert p.unprotect(p.protect(b"secret-data")) == b"secret-data"
             out["steps"].append("dpapi ok")
+        if sys.platform == "win32":
+            from . import winsys
+            ka = winsys.KeepAwake()
+            assert ka.set(True) and ka.method == "power_request", ka.method
+            try:                                         # informational: is the request visible to Windows?
+                import subprocess
+                r = subprocess.run(["powercfg", "/requests"], capture_output=True, timeout=30,
+                                   creationflags=0x08000000)
+                text = r.stdout.decode("cp437", "replace")
+                out["powercfg"] = text[-1500:]
+                if "TSA Bot" in text:
+                    out["steps"].append("power request listed by powercfg")
+            except Exception as e:
+                out["powercfg"] = f"{type(e).__name__}: {e}"
+            assert ka.set(False) is False
+            assert winsys.disable_power_throttling()
+            out["power"] = winsys.power_status()
+            out["steps"].append("keep-awake + no throttling ok")
         icon_image("running")
         if sys.platform == "win32" or os.environ.get("DISPLAY"):
             for mod in ("webview", "pystray"):          # pystray needs a desktop session
@@ -501,6 +547,8 @@ def main(argv=None) -> int:
         return selftest(data_dir)
 
     from . import winsys
+    if winsys.IS_WIN and winsys.disable_power_throttling():
+        log.info("power throttling disabled (the bot keeps full speed in the tray)")
     lock = winsys.SingleInstance(data_dir / "app.lock")
     show_flag = data_dir / "show.request"
     if not lock.acquire():
@@ -520,10 +568,7 @@ def main(argv=None) -> int:
         winsys.set_autostart(True)                        # keep the path right after the app was moved
 
     srv = ServerThread(app, free_port(a.port))
-    srv.start()
     url = f"http://127.0.0.1:{srv.port}/"
-    frag = f"#setup={ctl.setup_token}" if ctl.setup_token else f"#desk={ctl.desktop_token}"
-    log.info("TSA Bot %s", url)
 
     webview_mod = pystray_mod = None
     if not a.browser:
@@ -536,6 +581,9 @@ def main(argv=None) -> int:
     except Exception as e:
         log.warning("pystray unavailable: %s", e)
     shell = DesktopShell(srv, url, start_hidden=a.minimized, webview_mod=webview_mod, pystray_mod=pystray_mod)
+    srv.start()                                           # after the shell: it hears a resumed bot at once
+    frag = f"#setup={ctl.setup_token}" if ctl.setup_token else f"#desk={ctl.desktop_token}"
+    log.info("TSA Bot %s", url)
     shell.watch_show_requests(show_flag)
     gui_out = data_dir / "guitest.json"
     after = None

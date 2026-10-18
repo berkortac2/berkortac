@@ -29,7 +29,7 @@ class Risk:
         if self.stop_reason(realized_total):
             return False, "max_drawdown"
         if realized_today <= -self.s.daily_loss_limit_pct / 100 * self.s.budget_usdt:
-            return False, "Günlük zarar limiti doldu; yarın (UTC) yeni işlem açılacak"
+            return False, "Günlük zarar limiti doldu; gece yarısından sonra yeni işlem açılacak"
         if len(open_margins) >= self.s.max_positions:
             return False, "Maksimum eş zamanlı pozisyon sayısında"
         mpp = self.margin_per_position(realized_total)

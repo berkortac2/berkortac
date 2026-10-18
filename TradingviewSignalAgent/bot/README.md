@@ -60,6 +60,32 @@ durur: programı güncellemek için sadece program klasörünü değiştirmen ye
   - *Bu bilgisayarda beni hatırla*: şifre sorulmadan açılır. Anahtar Windows hesabına bağlı olarak
     (DPAPI) saklanır; dosya başka bir bilgisayara kopyalansa işe yaramaz. Canlı modda otomatik devam için gerekir.
 
+## Bot gerçekten tarıyor mu? Uyku ve donma
+
+Bot her 5 dakikalık mum kapanışında 36 coini tarar. Bilgisayar uyurken **hiçbir şey taranmaz** ve o sürede
+gelen sinyaller kaçar; uyanınca bot kaldığı yerden devam eder (açık pozisyonları borsadaki stop korur).
+
+- **Panel → Tarama şeridi**: son tarama saati, kaç coin tarandığı ve bugün kaç sinyal geldiği, kaçında pozisyon
+  açıldığı, kaçının neden atlandığı (üstüne gelince son atlanma sebebi). Son tarama 11 dakikadan eskiyse şerit
+  kırmızı olur.
+- Bot bir boşluk fark ederse (bilgisayar uyudu, program dondu ya da elektrik kesildi) bunu **Olay günlüğüne**
+  yazar, panelde uyarı gösterir, tepsi bildirimi ve Telegram mesajı gönderir: "Bot 47 dk boyunca tarama yapamadı
+  (03:10 – 03:57)".
+- Telegram'da **/rapor** da son tarama zamanını ve bugünkü sinyal / pozisyon / atlanan sayılarını gösterir.
+- Uygulama, simge halindeyken Windows'un onu "verimlilik modu"na alıp yavaşlatmasını kapatır ve bot
+  çalışırken Windows'a "uyuma" der (**Mod & uygulama → Bot çalışırken uykuya geçmeyi engelle**). Bunun çalıştığını
+  görmek için yönetici olarak açılan komut isteminde `powercfg /requests` yaz: SYSTEM altında
+  `TSA Bot: Binance pozisyonları izleniyor` görünmeli.
+
+**Windows'un uygulamadan bağımsız olarak yine de uyuduğu durumlar** (uygulama bunları engelleyemez):
+
+| Durum | Ne yapmalı |
+|---|---|
+| Dizüstünün kapağını kapatmak | Denetim Masası → Güç Seçenekleri → *Kapağı kapatmanın yapacağı işlem* → Fişe takılı: **Hiçbir şey yapma** |
+| Güç düğmesi / Başlat → Uyku | Bot bilgisayarında uyku seçme |
+| Dizüstü **pilde** çalışırken | Windows uyku engelleme isteğini bir süre sonra iptal eder → **şarja takılı** tut (panel pilde uyarır) |
+| Ayarlar → Sistem → Güç: *Fişe takılıyken uyku* | En sağlamı: **Hiçbir zaman** (ekranın kapanması sorun değil) |
+
 ## Başlat / durdur
 
 | Düğme | Ne yapar |

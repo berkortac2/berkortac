@@ -394,6 +394,8 @@ class TelegramService:
         elif kind == "net_down" and p.notify_errors:
             text = (f"📡 Binance'e {data.get('minutes')} dakikadır ulaşılamıyor. Açık pozisyonları borsadaki "
                     "stop emirleri koruyor; bot bağlantı dönünce kaldığı yerden devam eder.")
+        elif kind == "gap" and p.notify_errors:
+            text = reports.gap(data)
         elif kind == "net_up" and p.notify_errors:
             text = f"📶 Bağlantı geri geldi ({data.get('minutes')} dk kesinti)."
         if text:

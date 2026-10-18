@@ -26,6 +26,19 @@ from .strategy import Signal, Strategy
 log = logging.getLogger("tsabot.engine")
 DAY_MS = 86_400_000
 BAR_MS = 300_000
+GAP_S = 11 * 60         # the loop wakes every 5 min; a longer silence = sleeping computer / frozen program
+
+
+def clock(ms: int) -> str:
+    """Local wall-clock time for messages: 'HH:MM', with the date when it is not today."""
+    d = dt.datetime.fromtimestamp(ms / 1000, dt.timezone.utc).astimezone()
+    today = dt.datetime.now(dt.timezone.utc).astimezone().date()
+    return d.strftime("%H:%M") if d.date() == today else d.strftime("%d.%m %H:%M")
+
+
+def duration(minutes: int) -> str:
+    h, m = divmod(int(minutes), 60)
+    return f"{h} sa {m} dk" if h else f"{m} dk"
 
 
 def day_start_ms(ms: int) -> int:
@@ -99,6 +112,12 @@ class Engine:
         self.net_fail_since: float | None = None
         self.net_alerted = False
         self.bar_count = 0
+        # diagnostics: is the bot really scanning, and what happened to today's signals?
+        self.wall = time.time                     # injectable wall clock (tests)
+        self.loop_wall: float | None = None       # wall time the previous bar scan ended
+        self.scan: dict = {"last_ms": None, "coins": 0, "signals": 0}
+        self.day = {"start": None, "signals": 0, "skipped": 0, "last_skip": None}
+        self.last_gap: dict | None = None
 
     # ---------------------------------------------------------------- lifecycle
     @property
@@ -117,7 +136,15 @@ class Engine:
     def emit(self, level: str, msg: str) -> None:
         msg = REDACT.clean(msg)
         ts = self._now()
+        if level in ("signal", "skip"):
+            self._roll_day(ts)                    # before the event is stored: it is counted once, below
         self.store.event(level, msg, ts)
+        if level in ("signal", "skip"):
+            if level == "signal":
+                self.day["signals"] += 1
+            else:
+                self.day["skipped"] += 1
+                self.day["last_skip"] = msg
         self.feed.appendleft({"ts": ts, "level": level, "msg": msg})
         getattr(log, "warning" if level == "warn" else "error" if level == "error" else "info")(msg)
         if level == "error":
@@ -129,6 +156,16 @@ class Engine:
                 fn(kind, {**data, "mode": self.mode})
             except Exception as e:           # a notification must never disturb trading
                 log.warning("notification failed: %s", REDACT.clean(str(e))[:200])
+
+    def _roll_day(self, ts: int) -> None:
+        """Today's counters (local day). After a restart they are rebuilt from the event log."""
+        start = day_start_ms(ts)
+        if self.day["start"] == start:
+            return
+        counts = self.store.event_counts(start)
+        last = self.store.last_event("skip", start)
+        self.day = {"start": start, "signals": counts.get("signal", 0), "skipped": counts.get("skip", 0),
+                    "last_skip": last["msg"] if last else None}
 
     def _now(self) -> int:
         try:
@@ -241,10 +278,17 @@ class Engine:
             self.emit("info", f"Bot başladı ({self.mode}), {len(self.symbols)} USDT paritesi izleniyor, "
                               f"bütçe {self.s.budget_usdt:.2f} USDT, kaldıraç {self.s.leverage}x")
             self.status_msg = "Çalışıyor"
+            self._notify("state", state=self.state)
+            realtime = getattr(self.market, "realtime", False)
+            if realtime:
+                self._check_downtime()
+            self.loop_wall = self.wall()
             while not self.stop_event.is_set():
                 await self.market.wait_next_close(self.stop_event)
                 if self.stop_event.is_set():
                     break
+                if realtime:
+                    self._check_gap()
                 try:
                     await self.on_bar()
                     self.errors = 0
@@ -260,6 +304,8 @@ class Engine:
                     if self.errors >= 5:
                         self.emit("error", "Art arda 5 hata, bot durduruldu.")
                         break
+                finally:
+                    self.loop_wall = self.wall()
                 if getattr(self.market, "finished", False):
                     self.emit("info", "Replay verisi bitti.")
                     break
@@ -267,10 +313,38 @@ class Engine:
             self.emit("error", f"Başlatma hatası: {type(e).__name__}: {e}")
         finally:
             self.status_msg = "Durduruldu"
+            self.store.put(f"heartbeat:{self.mode}", None)    # a clean stop is not "downtime" next time
             if self.price_task:
                 self.price_task.cancel()
                 self.price_task = None
             self._notify("stopped", positions=len(self.positions))
+
+    def _check_gap(self) -> None:
+        """The loop wakes at every 5-minute close. A much longer silence means the computer slept /
+        hibernated or the program was frozen: nothing was scanned meanwhile and signals were missed."""
+        now = self.wall()
+        prev = self.loop_wall
+        if prev is None or now - prev < GAP_S:
+            return
+        mins = int((now - prev) // 60)
+        since, until = int(prev * 1000), int(now * 1000)
+        self.last_gap = {"minutes": mins, "since": since, "until": until, "cause": "sleep"}
+        self.emit("warn", f"Bot {duration(mins)} boyunca tarama yapamadı ({clock(since)} – {clock(until)}). "
+                          "Bilgisayar uykuya geçmiş ya da program donmuş olabilir; bu sürede gelen sinyaller "
+                          "kaçırıldı. Tarama devam ediyor.")
+        self._notify("gap", **self.last_gap)
+
+    def _check_downtime(self) -> None:
+        """At start: the previous run ended without a clean stop (power cut, crash, computer turned off)."""
+        hb = self.store.get(f"heartbeat:{self.mode}")
+        now = self.wall()
+        if not hb or now * 1000 - hb < GAP_S * 1000:
+            return
+        mins = int((now * 1000 - hb) // 60000)
+        self.last_gap = {"minutes": mins, "since": int(hb), "until": int(now * 1000), "cause": "down"}
+        self.emit("warn", f"Bot {duration(mins)} çalışmadı (son tarama {clock(int(hb))}). Program ya da bilgisayar "
+                          "kapanmış olabilir; bu sürede gelen sinyaller kaçırıldı.")
+        self._notify("gap", **self.last_gap)
 
     def _net_failed(self) -> None:
         now = time.time()
@@ -335,6 +409,7 @@ class Engine:
         loop = asyncio.get_running_loop()
         new = []
         now = self._now()
+        scanned = signals = 0
         for sym in self.active_symbols():
             k5, k1 = data.get(sym, (None, None))
             if k5 is None or not len(k5) or sym in getattr(self.broker, "external", ()) or sym in self.quarantine:
@@ -346,6 +421,8 @@ class Engine:
                                              self.s.allow_short)
             if sig is None:
                 continue
+            scanned += 1
+            signals += sig.direction != 0
             self.signals[sym] = {"symbol": sym, "bar_time": sig.bar_time, "direction": sig.direction,
                                  "rule": sig.rule, "close": sig.close, "atr": sig.atr, "features": sig.features}
             if sig.direction != 0 and self.entries:
@@ -355,6 +432,10 @@ class Engine:
                     self.emit("signal", f"{sym} {'AL (long)' if sig.direction > 0 else 'SAT (short)'} sinyali, "
                                         f"kural #{sig.rule + 1}, kapanış {sig.close:g}")
                 new.append(sig)
+
+        self.scan = {"last_ms": now, "coins": scanned, "signals": signals}
+        if getattr(self.market, "realtime", False):
+            self.store.put(f"heartbeat:{self.mode}", int(self.wall() * 1000))
 
         # 2) exits: paper TP-SL, indicator exit (ÇIK), time (exchange-side closes: _sync_exchange) ----------------
         for sym, pos in list(self.positions.items()):
@@ -517,7 +598,7 @@ class Engine:
         avail = await self.broker.available_usdt()
         ok, why = self.risk.can_open([p.margin for p in self.positions.values()], tot, today, avail)
         if not ok:
-            self.emit("info", f"{sig.symbol} sinyali atlandı: {why}")
+            self.emit("skip", f"{sig.symbol} sinyali atlandı: {why}")
             return
         rules = self.rules[sig.symbol]
         px = await self.market.price(sig.symbol)
@@ -525,13 +606,14 @@ class Engine:
             return
         qty, margin = self.risk.size(px, rules, tot)
         if qty <= 0:
-            self.emit("warn", f"{sig.symbol}: pozisyon başına bütçe borsanın minimum emir tutarının altında")
+            self.emit("skip", f"{sig.symbol} sinyali atlandı: pozisyon başına bütçe ({self.risk.margin_per_position(tot):.2f} $ "
+                              f"× {self.s.leverage}x) bu coinde borsanın minimum emir tutarının altında")
             return
         dm = self.strategy.params(sig.direction)
         amt, _ = await self.broker.position_of(sig.symbol)
         if amt != 0.0:                       # opened by hand after the bot started: never merge into it
             getattr(self.broker, "external", set()).add(sig.symbol)
-            self.emit("warn", f"{sig.symbol}: borsada bu coinde botun açmadığı bir pozisyon var, sinyal atlandı")
+            self.emit("skip", f"{sig.symbol} sinyali atlandı: borsada bu coinde botun açmadığı bir pozisyon var")
             return
         if self.stop_event.is_set():
             return
@@ -597,6 +679,16 @@ class Engine:
         self.store.put(f"positions:{self.mode}", {k: asdict(v) for k, v in self.positions.items()})
 
     # ---------------------------------------------------------------- views
+    def scan_view(self) -> dict:
+        now = self._now()
+        self._roll_day(now)
+        start = self.day["start"]
+        opened = self.store.opened_since(self.mode, start) + sum(p.entry_time_ms >= start
+                                                                for p in self.positions.values())
+        return {**self.scan, "signals_today": self.day["signals"], "skipped_today": self.day["skipped"],
+                "last_skip": self.day["last_skip"], "opened_today": opened, "gap": self.last_gap,
+                "realtime": bool(getattr(self.market, "realtime", False))}
+
     def snapshot(self) -> dict:
         tot, today = self.realized()
         unreal = {s: p.direction * (self.last_prices.get(s, p.entry_price) - p.entry_price) * p.qty
@@ -620,4 +712,5 @@ class Engine:
                 "max_positions": self.s.max_positions, "emergency_stop_pct": self.s.emergency_stop_pct,
                 "external": sorted(getattr(self.broker, "external", ()) or ()),
                 "net": {**health, "down_since": self.net_fail_since},
+                "scan": self.scan_view(),
                 "stats": self.store.stats(self.mode)}

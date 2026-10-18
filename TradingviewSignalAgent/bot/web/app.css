@@ -109,6 +109,17 @@ main{padding:18px 24px 40px;min-width:0}
 .card-h .sub{margin-top:3px;font-size:13px}
 .tools{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .kpis{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:14px;margin-bottom:16px}
+/* scan strip: is the bot really scanning? */
+.scanbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;border-radius:14px;padding:10px 16px;margin-bottom:12px;font-size:13px}
+.scanbar .sdot{width:9px;height:9px;border-radius:50%;background:var(--dim);flex:none}
+.scanbar.ok .sdot{background:var(--green);box-shadow:0 0 0 4px rgba(52,211,153,.16)}
+.scanbar.wait .sdot{background:var(--amber)}
+.scanbar.late{border-color:rgba(251,113,133,.45)}.scanbar.late .sdot{background:var(--red);box-shadow:0 0 0 4px rgba(251,113,133,.18)}
+.scanbar .s-today{margin-left:auto;text-align:right}
+.scan-alert{display:flex;gap:10px;align-items:flex-start;border-radius:14px;padding:10px 14px;margin:-4px 0 14px;font-size:13px;
+  background:rgba(251,191,36,.10);border:1px solid rgba(251,191,36,.35);color:#fde7a6}
+.scan-alert.bad{background:rgba(251,113,133,.10);border-color:rgba(251,113,133,.4);color:#ffc2cc}
+.scan-alert .ico{flex:none;margin-top:2px}
 .kpi{border-radius:var(--radius);padding:15px 16px;min-width:0;position:relative;overflow:hidden}
 .kpi.accent::after{content:"";position:absolute;inset:auto -30% -60% auto;width:180px;height:180px;border-radius:50%;
   background:radial-gradient(circle,rgba(139,143,255,.35),transparent 70%);pointer-events:none}
@@ -167,7 +178,7 @@ td.num,th.num{text-align:right}
 .feed.tall{max-height:70vh}
 .feed li{display:grid;grid-template-columns:86px 1fr;gap:10px;padding:8px 4px;border-bottom:1px solid rgba(255,255,255,.05);font-size:13px}
 .feed .t{color:var(--dim);font-size:12px;font-variant-numeric:tabular-nums}
-.feed .lv-error{color:#ffa3b0}.feed .lv-warn{color:var(--amber)}.feed .lv-trade{color:#7de3f4}.feed .lv-signal{color:#c4c6ff}
+.feed .lv-skip{color:#d9c08a}.feed .lv-error{color:#ffa3b0}.feed .lv-warn{color:var(--amber)}.feed .lv-trade{color:#7de3f4}.feed .lv-signal{color:#c4c6ff}
 
 /* forms */
 .form label{display:flex;flex-direction:column;gap:6px;font-weight:600;font-size:13px;margin-bottom:12px}

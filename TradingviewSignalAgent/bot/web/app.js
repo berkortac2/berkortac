@@ -183,7 +183,43 @@ function renderStatus(st) {
   $("k-budget").textContent = "%" + fmt(p, 0); $("k-budget-bar").style.width = p + "%";
   $("k-budget-sub").textContent = usd(st.margin_used) + " / " + usd(st.effective_budget) + " · " + st.leverage + "x";
   $("pos-note").textContent = st.price_ts ? "fiyatlar " + new Date(st.price_ts).toLocaleTimeString("tr-TR") : "";
+  renderScan(st);
   document.querySelectorAll(".js-close-all").forEach((x) => (x.disabled = !st.positions.length));
+}
+const SCAN_LATE_MS = 11 * 60000;
+function renderScan(st) {
+  const bar = $("scan-bar"), sc = st.scan, now = st.now || Date.now();
+  bar.classList.remove("ok", "wait", "late");
+  const alerts = [];
+  let bad = false;
+  if (!sc || st.state === "stopped") {
+    $("scan-main").textContent = "bot çalışmıyor"; $("scan-today").textContent = "";
+  } else {
+    if (!sc.last_ms) {
+      const next = new Date(Math.ceil((now + 1) / 300000) * 300000);
+      bar.classList.add("wait");
+      $("scan-main").textContent = "ilk tarama " + next.toLocaleTimeString("tr-TR", { hour: "2-digit", minute: "2-digit" }) + " mum kapanışında";
+    } else {
+      const age = Math.max(0, now - sc.last_ms), late = sc.realtime && age > SCAN_LATE_MS;
+      bar.classList.add(late ? "late" : "ok");
+      $("scan-main").textContent = "son " + new Date(sc.last_ms).toLocaleTimeString("tr-TR", { hour: "2-digit", minute: "2-digit" }) +
+        " (" + dur(age / 60000) + " önce) · " + sc.coins + " coin tarandı · bu mumda " + sc.signals + " sinyal";
+      if (late) { bad = true; alerts.push("Son tarama " + dur(age / 60000) + " önce yapıldı. Bilgisayar uykuya geçmiş, program donmuş ya da bağlantı kopmuş olabilir; bu sürede sinyal kaçırılır."); }
+    }
+    $("scan-today").textContent = "Bugün: " + sc.signals_today + " sinyal · " + sc.opened_today + " pozisyon açıldı · " + sc.skipped_today + " atlandı";
+    $("scan-today").title = sc.last_skip ? "Son atlanan: " + sc.last_skip : "";
+    const g = sc.gap;
+    if (g && now - g.until < 12 * 3600000) {
+      alerts.push((g.cause === "down" ? "Bot " + dur(g.minutes) + " çalışmadı" : "Bot " + dur(g.minutes) + " boyunca tarama yapamadı") +
+        " (" + tstr(g.since) + " – " + tstr(g.until) + "). " + (g.cause === "down" ? "Program ya da bilgisayar kapanmış olabilir." : "Bilgisayar uykuya geçmiş ya da program donmuş olabilir.") +
+        " Bu sürede gelen sinyaller kaçırıldı.");
+    }
+  }
+  const pw = st.power || {};
+  if (st.state !== "stopped" && pw.ac === false) alerts.push("Bilgisayar pil ile çalışıyor: Windows pilde uyku engelleme isteğini bir süre sonra iptal edebilir. Bilgisayarı şarja tak.");
+  if (st.state !== "stopped" && pw.prevent_sleep === false) alerts.push("\"Bot çalışırken uykuya geçmeyi engelle\" kapalı (Mod & uygulama). Bilgisayar uyursa bot tarama yapamaz.");
+  const box = $("scan-alert"); box.classList.toggle("hidden", !alerts.length); box.classList.toggle("bad", bad);
+  $("scan-alert-text").textContent = alerts.join(" ");
 }
 function stopOf(p) {                         // the stop that is really on the exchange
   const xs = [p.sl, p.emergency].filter((x) => x != null); if (!xs.length) return null;
