@@ -56,7 +56,8 @@ python -m tsabot                            # sadece web arayüzü: http://127.0
 
 ## Test ve teslim (yerel)
 
-- Proje yerelde geliştiriliyor; GitHub'a (Actions, artifact, PR) dayalı adım önerme.
+- Proje yerelde, GitHub ve git kullanılmadan geliştiriliyor: kullanıcıya GitHub, git komutu, yama, Actions
+  ya da PR önerme. Değişiklikler doğrudan proje klasöründeki dosyalara yapılır.
 - Uygulama kaynak koddan çalışır (`kur.bat` kısayolu → `TSABot.pyw`). Değişiklik sonrası: tepsiden
   "Tamamen kapat" → yeniden aç. Bota ayrılmış PC için exe: `bot\packaging\build_exe.bat` (PyInstaller +
   `--selftest`, çıktı `bot\dist\TSABot`).
