@@ -56,6 +56,7 @@ python -m tsabot                            # sadece web arayüzü: http://127.0
 
 ## Test ve teslim (yerel)
 
+- Kullanıcının bilgisayarındaki proje klasörü: `C:\Users\Berk\Documents\Claude\TSA bot` (tek klasör; ayarlar, şifreli anahtarlar ve işlem geçmişi `%LOCALAPPDATA%\TSABot` içinde).
 - Proje yerelde, GitHub ve git kullanılmadan geliştiriliyor: kullanıcıya GitHub, git komutu, yama, Actions
   ya da PR önerme. Değişiklikler doğrudan proje klasöründeki dosyalara yapılır.
 - Uygulama kaynak koddan çalışır (`kur.bat` kısayolu → `TSABot.pyw`). Değişiklik sonrası: tepsiden
