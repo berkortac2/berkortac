@@ -17,23 +17,26 @@ Tarayıcı gerekmez: kendi penceresi ve saatin yanındaki sistem tepsisinde bir 
 
 ## Kurulum (Windows)
 
-### A) Hazır program (önerilen)
-
-1. GitHub'da depoya gir → üstte **Actions** → soldan **TSA Bot Windows** → en üstteki (yeşil tikli) çalıştırma.
-2. Sayfanın altındaki **Artifacts** bölümünden **TSABot-windows**'u indir ve zip'i aç.
-3. Klasörü kalıcı bir yere kopyala (ör. `C:\TSABot`) ve **TSABot.exe**'ye çift tıkla.
-   Windows "bilinmeyen yayıncı" uyarısı verirse: **Ek bilgi → Yine de çalıştır**.
-4. İlk açılışta uygulama şifreni belirle (en az 10 karakter). Bu şifre API anahtarını ve Telegram
-   bilgisini de şifreler.
-
-Bu paketi GitHub her güncellemede kendi Windows bilgisayarında kurar, botun testlerini orada çalıştırır ve
-hazır programı açıp kendi kendini test eder (`--selftest`). Test geçmezse paket yayınlanmaz.
-
-### B) Kaynak koddan
+### A) Kaynak koddan çalıştırma (önerilen, geliştirme yapılan bilgisayar)
 
 1. **Python 3.11+** kur (python.org, kurulumda **Add Python to PATH** işaretli).
-2. Depoyu indir (dal `claude/awesome-mccarthy-r3cum5` → **Code → Download ZIP**) ve aç.
-3. `TradingviewSignalAgent\bot\kur.bat`'a çift tıkla. Masaüstüne **TSA Bot** kısayolu gelir.
+2. Proje klasöründe `TradingviewSignalAgent\bot\kur.bat`'a çift tıkla. Sanal ortam (`.venv`) kurulur,
+   masaüstüne **TSA Bot** kısayolu gelir. Uygulama bu kısayolla doğrudan kaynak koddan çalışır.
+3. İlk açılışta uygulama şifreni belirle (en az 10 karakter). Bu şifre API anahtarını ve Telegram
+   bilgisini de şifreler.
+
+**Kodda değişiklik yapınca**: tepsideki simgeye sağ tık → **Tamamen kapat**, sonra kısayolla yeniden aç.
+Yeni paket gerektiyse (`requirements*.txt` değiştiyse) `kur.bat`'ı bir kez daha çalıştır.
+
+### B) Tek klasörlük program (TSABot.exe) — bota ayrılmış başka bir bilgisayar için
+
+1. Önce A'daki gibi `kur.bat`'ı çalıştır.
+2. `TradingviewSignalAgent\bot\packaging\build_exe.bat`'a çift tıkla. Program bu bilgisayarda derlenir ve
+   kendini test eder (`--selftest`); sonuç `bot\dist\TSABot` klasörüdür.
+3. Bu klasörü bot bilgisayarına kopyala (ör. `C:\TSABot`) ve **TSABot.exe**'yi aç. Python gerekmez.
+   Windows "bilinmeyen yayıncı" uyarısı verirse: **Ek bilgi → Yine de çalıştır**.
+4. Güncellerken: bot bilgisayarında tepsiden **Tamamen kapat**, yeni `dist\TSABot` klasörünü eskisinin
+   üzerine kopyala, yeniden aç.
 
 macOS / Linux: `pip install -r requirements.txt -r requirements-desktop.txt` ve `python TSABot.pyw`.
 Pencere açılamazsa arayüz tarayıcıda açılır. Sunucu ortamı için: `python -m tsabot` (yalnızca tarayıcı arayüzü).

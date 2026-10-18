@@ -54,11 +54,12 @@ python -m tsabot                            # sadece web arayüzü: http://127.0
   `data/` (~25 GB) repoda yok; gerekirse `scripts/01_download.py`, `02_build_features.py`,
   `08_extend_5m_data.py` ile yeniden üretilir. Veri yoksa ilgili testler kendiliğinden atlanır.
 
-## CI ve teslim
+## Test ve teslim (yerel)
 
-- `.github/workflows/tsabot-windows.yml`: `bot/**` değişince Windows'ta testleri çalıştırır, TSABot.exe'yi
-  derler, `--selftest` ve `--guitest` ile dener ve `TSABot-windows` artifact'ını yükler (90 gün).
-  Tetikleyici dal listesini, çalışılan dala göre güncel tut.
+- Proje yerelde geliştiriliyor; GitHub'a (Actions, artifact, PR) dayalı adım önerme.
+- Uygulama kaynak koddan çalışır (`kur.bat` kısayolu → `TSABot.pyw`). Değişiklik sonrası: tepsiden
+  "Tamamen kapat" → yeniden aç. Bota ayrılmış PC için exe: `bot\packaging\build_exe.bat` (PyInstaller +
+  `--selftest`, çıktı `bot\dist\TSABot`).
 - Değişiklikten sonra ilgili testleri çalıştır. Arayüzde bir tuş/akış değiştiyse `tests/test_ui.py`'yi de
   güncelle. Strateji mantığı değişirse `tests/test_engine_replay.py` (replay paritesi) geçmeli.
 - Model kuralları (`model_5m.json`, AL kuralı, ÇIK çıkışı, 3×ATR/%8 acil stop, 96 mum zaman çıkışı) araştırma
