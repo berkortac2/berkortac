@@ -203,6 +203,7 @@ def test_mode_symbols_and_app_prefs(ui):
     toast(page, "ok", "Kaydedildi")
     assert app.state.tsa.app_prefs.resume_bot is True
     expect(page.locator("#app-info")).to_contain_text("Veri klasörü")
+    expect(page.locator("#app-info")).to_contain_text(str(tsabot.BOT_ROOT))           # which copy is running
 
 
 # ------------------------------------------------------------------------------------------ trading

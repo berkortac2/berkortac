@@ -96,6 +96,25 @@ def set_autostart(enable: bool, command: str | None = None, winreg_mod=None) -> 
     return is_autostart(wr)
 
 
+def autostart_command(winreg_mod=None) -> str | None:
+    """The command Windows runs for TSA Bot at sign-in, or None when it is not registered."""
+    if not IS_WIN and winreg_mod is None:
+        return None
+    wr = winreg_mod
+    if wr is None:                                       # pragma: no cover
+        import winreg as wr
+    try:
+        with wr.OpenKey(wr.HKEY_CURRENT_USER, RUN_KEY, 0, wr.KEY_QUERY_VALUE) as k:
+            return str(wr.QueryValueEx(k, RUN_NAME)[0])
+    except FileNotFoundError:
+        return None
+
+
+def program_location() -> str:
+    """Folder of the running copy: the .exe folder, or the bot folder of a source installation."""
+    return str(Path(sys.executable).parent if getattr(sys, "frozen", False) else BOT_ROOT)
+
+
 def is_autostart(winreg_mod=None) -> bool:
     if not IS_WIN and winreg_mod is None:
         return False

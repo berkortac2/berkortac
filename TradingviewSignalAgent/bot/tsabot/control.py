@@ -99,10 +99,17 @@ class Controller:
                 "prevent_sleep": self.app_prefs.prevent_sleep}
 
     def app_info(self) -> dict:
-        from . import __version__
-        return {"desktop": self.desktop, "platform": sys.platform, "version": __version__,
+        from . import __version__, winsys
+        info = {"desktop": self.desktop, "platform": sys.platform, "version": __version__,
                 "replay_available": self.replay_available(), "remember_available": self.protector.available,
-                "remembered": self.remember_path.exists(), "data_dir": str(self.data_dir)}
+                "remembered": self.remember_path.exists(), "data_dir": str(self.data_dir),
+                "program_dir": winsys.program_location()}
+        if self.desktop and winsys.IS_WIN:
+            # which copy Windows opens at sign-in (the last copy started with the setting on registers itself)
+            cmd = winsys.autostart_command()
+            info["autostart_command"] = cmd
+            info["autostart_here"] = bool(cmd) and info["program_dir"].lower() in cmd.lower()
+        return info
 
     # ================================================================== secrets
     def unlock(self, password: str) -> bool:

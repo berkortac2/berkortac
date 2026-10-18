@@ -232,6 +232,14 @@ def test_windows_startup_entry():
     assert not winsys.set_autostart(False, winreg_mod=r)             # removing twice is fine
 
 
+def test_startup_command_shows_which_copy_windows_opens():
+    r = FakeReg()
+    assert winsys.autostart_command(winreg_mod=r) is None
+    winsys.set_autostart(True, '"C:\\TSABot\\TSABot.exe" --minimized', winreg_mod=r)
+    assert winsys.autostart_command(winreg_mod=r) == '"C:\\TSABot\\TSABot.exe" --minimized'
+    assert winsys.program_location() == str(tsabot.BOT_ROOT)                     # running from the sources
+
+
 def test_launch_command_points_to_the_launcher():
     cmd = winsys.launch_command(True)
     assert "TSABot.pyw" in cmd and cmd.endswith("--minimized")

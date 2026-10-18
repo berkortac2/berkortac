@@ -493,7 +493,12 @@ async function loadApp() {
     $("p-remember").checked = a.remembered; $("p-remember").disabled = !a.remember_available;
     const opt = [...$("s-mode").options].find((o) => o.value === "replay"); if (opt) opt.hidden = !a.replay_available;
     const kv = (k, v) => [h("span", { text: k }), h("b", { text: v })];
-    $("app-info").replaceChildren(...kv("Sürüm", a.version), ...kv("Veri klasörü", a.data_dir), ...kv("Sistem", a.platform));
+    const rows = [...kv("Sürüm", a.version), ...kv("Bu kopya", a.program_dir), ...kv("Veri klasörü", a.data_dir)];
+    if ("autostart_command" in a) {
+      const st = !a.autostart_command ? "kayıtlı değil" : a.autostart_here ? "bu kopya açılır" : "BAŞKA bir kopya açılır: " + a.autostart_command;
+      rows.push(...kv("Windows açılışında", st));
+    }
+    $("app-info").replaceChildren(...rows, ...kv("Sistem", a.platform));
   } catch (_) { /* not critical */ }
 }
 for (const [id, key] of [["p-autostart", "autostart"], ["p-resume", "resume_bot"], ["p-notify", "notify_desktop"], ["p-awake", "prevent_sleep"]])
